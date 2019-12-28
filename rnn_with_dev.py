@@ -45,17 +45,18 @@ d_vocab = list2dict(d_vocab_lst)
 good = ['a','b','c','d']
 bad = ['a','c','b','d']
 
-model = RnnAcceptor(14, 40, 10, len(d_vocab_lst), 2)
+model = RnnAcceptor(20, 50, 50, len(d_vocab_lst), 2)
 loss_function = nn.CrossEntropyLoss()#nn.NLLLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 model.train()
 loss_acc_lst = []
 dev_acc_lst = []
+dev_lss_lst = []
 import gen_examples
 from gen_examples import LanguageGen
 
-SUB_SEQ_LIM = 100
+SUB_SEQ_LIM = 50
 
 lg = LanguageGen(None,None, SUB_SEQ_LIM)
 examples = lg.genExamples(250)
@@ -102,6 +103,7 @@ for i in range(40):
     loss_acc_lst.append(loss_acc/len(examples))
     with torch.no_grad():
         dev_cntr = 0
+        dev_loss = 0
         for sample in devexamples:
             data, label = sample
             t_data = torch.LongTensor([[d_vocab[s] for s in data]])
@@ -110,13 +112,18 @@ for i in range(40):
             prediction = model.getLabel(tag_score)
             if int(prediction) == int(label):
                 dev_cntr += 1
+            dev_loss_f = loss_function(tag_score, t_label)
+            dev_loss += dev_loss_f.item()
         dev_acc = dev_cntr/len(devexamples)
         dev_acc_lst.append(dev_acc)
+        dev_lss_lst.append(dev_loss)
         print("dev acc = " + str(dev_acc))
+        print("dev_loss = " + str(dev_loss))
 
 
 printToGraph("time", "train loss", [i for i in range(len(loss_acc_lst))], loss_acc_lst) 
 printToGraph("time", "dev acc", [i for i in range(len(dev_acc_lst))], dev_acc_lst) 
+printToGraph("time", "dev loss", [i for i in range(len(dev_lss_lst))], dev_lss_lst) 
 
 with torch.no_grad():
     for d in [good, bad]:
