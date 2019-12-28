@@ -45,7 +45,7 @@ d_vocab = list2dict(d_vocab_lst)
 good = ['a','b','c','d']
 bad = ['a','c','b','d']
 
-model = RnnAcceptor(14, 10, 10, len(d_vocab_lst), 2)
+model = RnnAcceptor(14, 40, 10, len(d_vocab_lst), 2)
 loss_function = nn.CrossEntropyLoss()#nn.NLLLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
@@ -55,7 +55,7 @@ dev_acc_lst = []
 import gen_examples
 from gen_examples import LanguageGen
 
-SUB_SEQ_LIM = 10
+SUB_SEQ_LIM = 100
 
 lg = LanguageGen(None,None, SUB_SEQ_LIM)
 examples = lg.genExamples(250)
