@@ -37,8 +37,8 @@ class LanguageGen(object):
     def genExamples(self, size):
         self.db = []
         for i in range(size):
-            self.db.append((self._gen_pos_example(), 0))
-            self.db.append((self._gen_neg_example(), 1))
+            self.db.append((self._gen_pos_example(), 1))
+            self.db.append((self._gen_neg_example(), 0))
         return self.db
     
 
