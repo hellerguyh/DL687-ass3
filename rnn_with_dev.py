@@ -45,9 +45,14 @@ d_vocab = list2dict(d_vocab_lst)
 good = ['a','b','c','d']
 bad = ['a','c','b','d']
 
-model = RnnAcceptor(20, 50, 50, len(d_vocab_lst), 2)
+import sys
+
+model = RnnAcceptor(5, 10, 50, len(d_vocab_lst), 2)
 loss_function = nn.CrossEntropyLoss()#nn.NLLLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+
+if (sys.argv[1] == 'load') or (sys.argv[1] == 'loadsave'):
+    model.load_state_dict(torch.load('model_state.pt'))
 
 model.train()
 loss_acc_lst = []
@@ -56,7 +61,7 @@ dev_lss_lst = []
 import gen_examples
 from gen_examples import LanguageGen
 
-SUB_SEQ_LIM = 50
+SUB_SEQ_LIM = int(sys.argv[2])
 
 lg = LanguageGen(None,None, SUB_SEQ_LIM)
 examples = lg.genExamples(250)
@@ -64,9 +69,12 @@ examples = lg.genExamples(250)
 devlg = LanguageGen(None,None, SUB_SEQ_LIM)
 devexamples = lg.genExamples(25)
 
-BATCH_SIZE = 50
+BATCH_SIZE = 125
 
-for i in range(40):
+with open ('curr_examples', 'w') as wf:
+    for example in examples: wf.write(str(example) + "\n")
+
+for i in range(10):
     random.shuffle(examples)
     loss_acc = 0
     batch_cntr = 0 
@@ -93,6 +101,7 @@ for i in range(40):
         first = False
 
         if batch_cntr%(BATCH_SIZE) == 0:
+            loss = loss/BATCH_SIZE
             loss.backward()
             loss_acc += loss.item()
             optimizer.step()
@@ -124,6 +133,9 @@ for i in range(40):
 printToGraph("time", "train loss", [i for i in range(len(loss_acc_lst))], loss_acc_lst) 
 printToGraph("time", "dev acc", [i for i in range(len(dev_acc_lst))], dev_acc_lst) 
 printToGraph("time", "dev loss", [i for i in range(len(dev_lss_lst))], dev_lss_lst) 
+
+if (sys.argv[1] == 'save') or (sys.argv[1] == 'loadsave'):
+    torch.save(model.state_dict(), 'model_state.pt')
 
 with torch.no_grad():
     for d in [good, bad]:
