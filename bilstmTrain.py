@@ -24,7 +24,7 @@ def reverseDict(d):
     return vals
 
 
-class As2Dataset(Dataset):
+class As3Dataset(Dataset):
     def __init__(self, file_path, lower_words = False, is_test_data=False):    
         self.lower_words = lower_words
         self.file_path = file_path
@@ -60,6 +60,9 @@ class As2Dataset(Dataset):
         self.tag_set = set(tag_list)
         self.dataset = dataset
 
+    def __len__(self):
+        return len(self.dataset)
+
     def lowerWords(self, x):
         return x.lower() if self.lower_words else x
 
@@ -94,16 +97,32 @@ class Sample2EmbedIndex(object):
       except KeyError:
         return dic['UNKNOWN']
 
+    def _translate1(self, word_list):
+        return [[self._dictHandleExp(self.wdict, word)] for word in word_list]
+
+    def _translate2(self, word_list):
+        return [[self._dictHandleExp(self.cdict, l) for l in word] for word in word_list]
+
     def translate(self, word_list):
         if self.flavor == 1:
-            return [[self._dictHandleExp(self.wdict, word)] for word in word_list]
+            return [np.array(self._translate1(word_list))] 
         if self.flavor == 2:
-            return [[[self._dictHandleExp(self.cdict, l) for l in word]] for word in word_list]
+            return [np.array(self._translate2(word_list))]
         if self.flavor == 3:
-            return [[self._dictHandleExp(self.wdict, word),self._dictHandleExp(self.pre_dict, word[:3]), 
-                self._dictHandleExp(self.suf_dict, word[-3:])] for word in word_list]
+            w = [self._dictHandleExp(self.wdict, word) for word in word_list]
+            p = [self._dictHandleExp(self.pre_dict, word[:3]) for word in word_list]
+            s = [self._dictHandleExp(self.suf_dict, word[-3:]) for word in word_list]
+            return [np.array([w, p, s])]
         if self.flavor == 4:
-            return [[self._dictHandleExp(self.wdict, word), [self._dictHandleExp(self.cdict, l) for l in word]] for word in word_list]
+            first = self._translate1(word_list)
+            second = self._translate2(word_list)
+            return [first, second]
+
+    def getLengths(self):
+        if self.flavor == 1:
+            return {'word': len(self.wdict)}
+        if self.flavor == 3:
+            return {'word' : len(self.wdict), 'pre' : len(self.pre_dict), 'suf' : len(self.suf_dict)}
 
 class TagTranslator(object):
     def __init__(self, tagset):
@@ -112,12 +131,58 @@ class TagTranslator(object):
         return [self.tag_dict[tag] for tag in tag_list]
 
 
+class MyEmbedding(nn.Module):
+    def __init__(self, embedding_dim, translator):
+        super(MyEmbedding, self).__init__()
+        self.flavor = translator.flavor
+        if translator.flavor == 1:
+            self.wembeddings = nn.Embedding(translator.getLengths()['word'], embedding_dim)
+        if translator.flavor == 3:
+            self.wembeddings = nn.Embedding(translator.getLengths()['word'], embedding_dim)
+            self.pembeddings = nn.Embedding(translator.getLengths()['pre'], embedding_dim)
+            self.sembeddings = nn.Embedding(translator.getLengths()['suf'], embedding_dim)
+    
+    def forward(self, data):
+        if self.flavor == 1:
+            return self.wembeddings(data)
+        if self.flavor == 3:
+            return self.wembeddings(data) + self.pembeddings(data) + self.sembeddings(data) 
+
+
+class BiLSTM(nn.Module):
+    def __init__(self, embedding_dim, hidden_rnn_dim, tagset_size,
+                translator, dropout=False):
+        super(BiLSTM, self).__init__()
+        self.embeddings = MyEmbedding(embedding_dim, translator)
+        self.lstm = nn.LSTM(input_size = embedding_dim, hidden_size = hidden_rnn_dim,
+                            bidirectional=True, num_layers=2)
+        self.linear1 = nn.Linear(hidden_rnn_dim*2, tagset_size)
+    
+    def forward(self, data, batch_size):
+        embeds = self.embeddings.forward(data)
+        lstm_out, hidden1 = self.lstm(embeds.view(len(data[0]), batch_size, -1))
+        o_ln1 = [self.linear1(lstm_w) for lstm_w in lstm_out]
+        return o_ln1
+
+    def getLabel(self, data):
+        _, prediction_argmax = data[0].max(0)
+        return prediction_argmax
+
+
 class Run(object):
     def __init__(self, params):
         self.flavor = params['FLAVOR']
+        self.edim = params['EMBEDDING_DIM']
+        self.rnn_h_dim = params['RNN_H_DIM']
+        self.num_epochs = params['EPOCHS']
+        self.batch_size = params['BATCH_SIZE']
 
     def train(self):
-        train_dataset = As2Dataset('train_short')
+        print("Loading data")
+        train_dataset = As3Dataset('train')
+        train_dataloader = DataLoader(dataset=train_dataset,
+                          batch_size=self.batch_size, shuffle=True)
+        print("Done loading data")
 
         wTran = Sample2EmbedIndex(train_dataset.word_set, train_dataset.prefix_set,
                                   train_dataset.suffix_set, self.flavor)
@@ -126,137 +191,31 @@ class Run(object):
         train_dataset.setWordTranslator(wTran)
         train_dataset.setLabelTranslator(lTran)
 
-        for sample in train_dataset:
-            pass
+        tagger = BiLSTM(embedding_dim = self.edim, hidden_rnn_dim = self.rnn_h_dim,
+                translator=wTran, tagset_size = len(lTran.tag_dict))
 
-run = Run({'FLAVOR':3})
+        loss_function = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(tagger.parameters(), lr=0.01)
+
+        print("Starting training")
+        for epoch in range(self.num_epochs):
+            loss_acc = 0
+            for sample in train_dataloader:
+                tagger.zero_grad()
+                data_list, label_list = sample
+                data_list = data_list[0] #since there is only one type of embedding
+                tag_score = tagger.forward(data_list, self.batch_size)
+                loss = None
+                for tag, label in zip(tag_score, label_list):
+                    t_label = torch.tensor([label]).long()
+                    t = loss_function(tag, t_label)
+                    loss = t if loss is None else loss + t
+                loss_acc += loss.item()
+                loss.backward()
+                optimizer.step()
+            print("epoch: " + str(epoch) + " " + str(loss_acc))
+
+
+
+run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 3, 'RNN_H_DIM' : 30, 'EPOCHS' : 5, 'BATCH_SIZE' : 1})
 run.train()
-'''
-
-
-            DEBUG_PRINT("building space-widened content (content with edges)")
-            space_widened_content = [("\sb", "SP"), ("\sb", "SP")]
-
-            for line in content:
-                if line == "":
-                    space_widened_content.append(("\se", "SP"))
-                    space_widened_content.append(("\se", "SP"))
-                    space_widened_content.append(("\sb", "SP"))
-                    space_widened_content.append(("\sb", "SP"))
-                else:
-                    splitted_line = line.split()
-                    label = None if is_test_data else splitted_line[1]
-                    space_widened_content.append((self.lowerWords(splitted_line[0]), label if len(splitted_line) > 1 else ''))
-
-            space_widened_content.append(("\sb", "SP"))
-            space_widened_content.append(("\sb", "SP"))
-
-            DEBUG_PRINT("Building N-Grams")
-            self.data_set = [([space_widened_contest[i] 
-
-
-
-            self.tagged_offset = tagged_offset
-            self.ngrams_set = [([self.lowerWords(w[0]) for w in space_widened_content[i:i + NGRAM_SIZE]], space_widened_content[i + self.tagged_offset][1]) for i in
-                           range(len(space_widened_content) - NGRAM_SIZE) if space_widened_content[i + self.tagged_offset][1] != 'SP']
-
-            if include_subword_features:
-              self.prefix_ngrams_set = [([self.lowerWords(w[0][:3]) for w in space_widened_content[i:i + NGRAM_SIZE]], space_widened_content[i + self.tagged_offset][1]) for i in
-                          range(len(space_widened_content) - NGRAM_SIZE) if space_widened_content[i + self.tagged_offset][1] != 'SP']
-
-              self.suffix_ngrams_set = [([self.lowerWords(w[0][-3:]) for w in space_widened_content[i:i + NGRAM_SIZE]], space_widened_content[i + self.tagged_offset][1]) for i in
-                          range(len(space_widened_content) - NGRAM_SIZE) if space_widened_content[i + self.tagged_offset][1] != 'SP']
-
-
-            self.length = len(self.ngrams_set)
-
-            if include_subword_features:
-              if len(self.prefix_ngrams_set) != self.length:
-                print("problem - prefix dataset is not the same size as word dataset")
-                sys.exit(1)
-
-              if len(self.suffix_ngrams_set) != self.length:
-                print("problem - suffix dataset is not the same size as word dataset")
-                sys.exit(1)
-
-            self.learned_vocab_lst = list(set([self.lowerWords(w[0]) for w in self.space_widened_content]))
-            self.learned_vocab_lst.append('UNMAPPED_DEFAULT')
-
-            if include_subword_features:
-              self.learned_prefix_vocab_lst = list(set([self.lowerWords(w[0][:3]) for w in self.space_widened_content]))
-              self.learned_prefix_vocab_lst.append('UNMAPPED_DEFAULT')
-              self.learned_suffix_vocab_lst = list(set([self.lowerWords(w[0][-3:]) for w in self.space_widened_content]))
-              self.learned_suffix_vocab_lst.append('UNMAPPED_DEFAULT')
-
-            if data_vocab is None:
-              self.vocab = list2dict(self.learned_vocab_lst)
-            else:
-              self.vocab = data_vocab
-
-            if include_subword_features:
-              if prefix_data_vocab is None:
-                self.prefix_vocab = list2dict(self.learned_prefix_vocab_lst)
-              else:
-                self.prefix_vocab = prefix_data_vocab
-
-              if suffix_data_vocab is None:
-                self.suffix_vocab = list2dict(self.learned_suffix_vocab_lst)
-              else:
-                self.suffix_vocab = suffix_data_vocab
-
-            if label_vocab is None:
-              labels = [w[1] for w in space_widened_content if w[1] != 'SP']
-              labels_set = list(set(labels))
-              self.labels_vocab = list2dict(labels_set)
-            else:
-              self.labels_vocab = label_vocab
-
-  def lowerWords(self, x):
-      return x.lower() if self.lower_words else x
-
-  def updateVocab(self, new_vocab):
-    self.vocab = new_vocab
-
-  def __getitem__(self, index):
-    def _dictHandleExp(dic, val):
-      try: 
-        return dic[val]
-      except KeyError:
-        self.exp_cntr += 1
-        self.not_found.append(val)
-        return dic['UNMAPPED_DEFAULT']
-    if self.include_subword_features:
-      data = np.array([_dictHandleExp(self.vocab,self.ngrams_set[index][0][i]) for i in range(NGRAM_SIZE)])
-      data_pre = np.array([_dictHandleExp(self.prefix_vocab,self.prefix_ngrams_set[index][0][i]) for i in range(NGRAM_SIZE)])
-      data_suf = np.array([_dictHandleExp(self.suffix_vocab,self.suffix_ngrams_set[index][0][i]) for i in range(NGRAM_SIZE)])
-      label = self.labels_vocab[self.ngrams_set[index][1]]
-      return np.array([data, data_pre, data_suf]) , label
-    else:
-      data = np.array([_dictHandleExp(self.vocab,self.ngrams_set[index][0][i]) for i in range(NGRAM_SIZE)])
-      label = self.labels_vocab[self.ngrams_set[index][1]]
-      return data, label
-    
-  def __len__(self):
-    return self.length
-
-  def getVocab(self):
-    return self.vocab
-
-  def getLabelsVocab(self):
-    return self.labels_vocab
-
-  def getPrefixVocab(self):
-    if self.include_subword_features:
-      return self.prefix_vocab
-    else:
-      return []
-
-  def getSuffixVocab(self):
-    if self.include_subword_features:
-      return self.suffix_vocab
-    else:
-      return []
-
-
-
-'''
