@@ -76,9 +76,13 @@ class As3Dataset(Dataset):
     
     def setLabelTranslator(self, tran):
         self.lT = tran
-  
+ 
+    def toIndexes(self, wT, lT):
+        self.dataset = [(wT.translate(data[0]), lT.translate(data[1])) for data in self.dataset]
+
     def __getitem__(self, index):
-        return self.wT.translate(self.dataset[index][0]), self.lT.translate(self.dataset[index][1])
+        return self.dataset[index][0], self.dataset[index][1]
+        #return self.wT.translate(self.dataset[index][0]), self.lT.translate(self.dataset[index][1])
         
 
 class Sample2EmbedIndex(object):
@@ -197,8 +201,9 @@ class Run(object):
                                   train_dataset.suffix_set, self.flavor)
         lTran = TagTranslator(train_dataset.tag_set)
 
-        train_dataset.setWordTranslator(wTran)
-        train_dataset.setLabelTranslator(lTran)
+        #train_dataset.setWordTranslator(wTran)
+        #train_dataset.setLabelTranslator(lTran)
+        train_dataset.toIndexes(wT = wTran, lT = lTran)
 
         tagger = BiLSTM(embedding_dim = self.edim, hidden_rnn_dim = self.rnn_h_dim,
                 translator=wTran, tagset_size = len(lTran.tag_dict))
