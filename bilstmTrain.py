@@ -188,12 +188,23 @@ class Padding(object):
         return padded_data, padded_tag, len_b
 
     def collate_fn(self, data):
+
+        data.sort(key=lambda x: x[2], reverse=True)
+
         data_b = [d[0] for d in data]
         tag_b = [d[1] for d in data]
         len_b = [d[2] for d in data]
-        data_b = [b for _,b in sorted(zip(len_b, data_b), reverse=True)]
-        tag_b = [b for _,b in sorted(zip(len_b, tag_b), reverse=True)]
-        len_b = sorted(len_b, reverse=True)
+        '''print(data_b)
+        print(len_b)
+        try:
+            data_b = [b for _,b in sorted(zip(len_b, data_b), reverse=True)]
+            tag_b = [b for _,b in sorted(zip(len_b, tag_b), reverse=True)]
+            len_b = sorted(len_b, reverse=True)
+        except:
+            print(data_b)
+            print(len_b)
+            raise Exception()
+        '''
 
         return self.padBatch(data_b, tag_b, len_b)
 
@@ -214,7 +225,6 @@ class BiLSTM(nn.Module):
         lstm_out, _ = self.lstm(packed_embeds)
         unpacked_lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first = True)
        
-        print("unpacked_lstm_out shape: " + str(unpacked_lstm_out.shape))
         o_ln1 = [[self.linear1(o) for o in seq] for seq in unpacked_lstm_out]
         #o_ln1 = [self.linear1(lstm_w) for lstm_w in unpacked_lstm_out]
         return o_ln1
@@ -234,7 +244,7 @@ class Run(object):
 
     def train(self):
         print("Loading data")
-        train_dataset = As3Dataset('train_short')
+        train_dataset = As3Dataset('train')
         print("Done loading data")
 
         wTran = Sample2EmbedIndex(train_dataset.word_set, train_dataset.prefix_set,
@@ -279,5 +289,5 @@ class Run(object):
 
 
 
-run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 10, 'RNN_H_DIM' : 30, 'EPOCHS' : 5, 'BATCH_SIZE' : 10})
+run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 10, 'RNN_H_DIM' : 30, 'EPOCHS' : 5, 'BATCH_SIZE' : 100})
 run.train()
