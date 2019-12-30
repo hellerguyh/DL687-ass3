@@ -261,7 +261,10 @@ class Run(object):
         tagger = BiLSTM(embedding_dim = self.edim, hidden_rnn_dim = self.rnn_h_dim,
                 translator=wTran, tagset_size = len(lTran.tag_dict) + 1)
 
-        loss_function = nn.CrossEntropyLoss(ignore_index=len(lTran.tag_dict))
+        if (sys.argv[1] == 'load') or (sys.argv[1] == 'loadsave'):
+            tagger.load_state_dict(torch.load('bilstm_params.pt'))
+
+        loss_function = nn.CrossEntropyLoss() #ignore_index=len(lTran.tag_dict))
         optimizer = torch.optim.Adam(tagger.parameters(), lr=0.01)
 
         padder = Padding(wTran, lTran)
@@ -272,6 +275,7 @@ class Run(object):
         print("Starting training")
         print("data length = " + str(len(train_dataset)))
         import timeit
+        
         for epoch in range(self.num_epochs):
             loss_acc = 0
             progress1 = 0
@@ -310,8 +314,49 @@ class Run(object):
                 optimizer.step()
             print("epoch: " + str(epoch) + " " + str(loss_acc))
             print("accuracy " + str(correct_cntr/total_cntr))
+        
+        if (sys.argv[1] == 'save') or (sys.argv[1] == 'loadsave'):
+            torch.save(tagger.state_dict(), 'bilstm_params.pt')
+        
+        testing_dataloader = DataLoader(dataset=train_dataset,
+                          batch_size=1, shuffle=False,
+                          collate_fn = padder.collate_fn)
+        reversed_dict = reverseDict(lTran.tag_dict)
+        reversed_dict.append('UNKNOWN')
+        with torch.no_grad():
+            with open('tmp_train_res', 'w') as wf:
+                for sample in testing_dataloader:
+                    batch_data_list, batch_label_list, batch_len_list = sample
+                    #print(batch_len_list)
+                    batch_tag_score = tagger.forward(batch_data_list, batch_len_list, len(batch_data_list))
+                    #print(batch_tag_score.shape)
+                    for i, sample_tag_list in enumerate(batch_tag_score):
+                        #print(sample_tag_list.shape)
+                        predicted_tags = tagger.getLabel(sample_tag_list)
+                        #print(predicted_tags.shape)
+                        for j in range(batch_len_list[i]):
+                            try:
+                                t = predicted_tags[j]
+                            except:
+                                print("j:")
+                                print(j)
+                                print("t:")
+                                print(t)
+                                print("predicted_tags:")
+                                print(predicted_tags)
+                            try:
+                                w = reversed_dict[t]
+                            except:
+                                print("w:")
+                                print(w)
+                                print("t:")
+                                print(t)
+                                print("reversed dict:")
+                                print(reversed_dict)
+                            wf.write(str(w) + "\n")
+                        wf.write("\n")
 
 
 
-run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 10, 'BATCH_SIZE' : 100})
+run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 2, 'BATCH_SIZE' : 100})
 run.train()
