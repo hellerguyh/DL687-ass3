@@ -261,13 +261,13 @@ class Run(object):
         tagger = BiLSTM(embedding_dim = self.edim, hidden_rnn_dim = self.rnn_h_dim,
                 translator=wTran, tagset_size = len(lTran.tag_dict) + 1)
 
-        loss_function = nn.CrossEntropyLoss()
+        loss_function = nn.CrossEntropyLoss(ignore_index=len(lTran.tag_dict))
         optimizer = torch.optim.Adam(tagger.parameters(), lr=0.01)
 
         padder = Padding(wTran, lTran)
 
         train_dataloader = DataLoader(dataset=train_dataset,
-                          batch_size=self.batch_size, shuffle=False,
+                          batch_size=self.batch_size, shuffle=True,
                           collate_fn = padder.collate_fn)
         print("Starting training")
         print("data length = " + str(len(train_dataset)))
@@ -277,6 +277,7 @@ class Run(object):
             progress1 = 0
             progress2 = 0
             correct_cntr = 0
+            total_cntr = 0
             for sample in train_dataloader:
                 if progress1/1000 == progress2:
                     print("reached " + str(progress2*1000))
@@ -293,18 +294,24 @@ class Run(object):
 
                 predicted_tags = tagger.getLabel(flatten_tag)
                 diff = predicted_tags - flatten_label
-                false_pos = len(flatten_label[flatten_label == lTran.getLengths()['tag']])
-                tmp = len(diff[diff == 0]) - false_pos
-                correct_cntr += tmp if tmp > 0 else 0 
+                no_diff = (diff == 0)
+                o_mask = (flatten_label == lTran.getLengths()['tag'])
+                no_diff_and_o_label = no_diff*o_mask
+                to_ignore = len(no_diff_and_o_label[no_diff_and_o_label == True])
+                tmp = len(diff[diff == 0]) - to_ignore
+                if tmp < 0:
+                    raise Exception("non valid tmp value")
+                correct_cntr += tmp 
+                total_cntr += len(predicted_tags) - to_ignore
 
                 loss = loss_function(flatten_tag, flatten_label)
                 loss_acc += loss.item()
                 loss.backward()
                 optimizer.step()
             print("epoch: " + str(epoch) + " " + str(loss_acc))
-            print("accuracy " + str(correct_cntr/len(train_dataset)))
+            print("accuracy " + str(correct_cntr/total_cntr))
 
 
 
-run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 30, 'EPOCHS' : 5, 'BATCH_SIZE' : 100})
+run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 10, 'BATCH_SIZE' : 100})
 run.train()
