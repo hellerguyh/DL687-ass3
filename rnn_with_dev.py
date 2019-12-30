@@ -69,12 +69,12 @@ examples = lg.genExamples(250)
 devlg = LanguageGen(None,None, SUB_SEQ_LIM)
 devexamples = lg.genExamples(25)
 
-BATCH_SIZE = 125
+BATCH_SIZE = 50
 
 with open ('curr_examples', 'w') as wf:
     for example in examples: wf.write(str(example) + "\n")
 
-for i in range(10):
+for i in range(30):
     random.shuffle(examples)
     loss_acc = 0
     batch_cntr = 0 
