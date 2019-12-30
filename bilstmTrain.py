@@ -233,7 +233,7 @@ class BiLSTM(nn.Module):
         return shaped
 
     def getLabel(self, data):
-        _, prediction_argmax = data[0].max(0)
+        _, prediction_argmax = torch.max(data, 1)
         return prediction_argmax
 
 
@@ -276,43 +276,35 @@ class Run(object):
             loss_acc = 0
             progress1 = 0
             progress2 = 0
+            correct_cntr = 0
             for sample in train_dataloader:
                 if progress1/1000 == progress2:
                     print("reached " + str(progress2*1000))
-                    if progress2 > 0:
-                        print("nn_time " + str(nn_time))
-                        print("loss_time " + str(loss_time))
                     progress2+=1
                 progress1 += self.batch_size
                 tagger.zero_grad()
                 batch_data_list, batch_label_list, batch_len_list = sample
                 #data_list = data_list[0] #since there is only one type of embedding
                 #padder.padBatch(data_list, label_list, lens_list)
-                nn_start = timeit.default_timer()
                 batch_tag_score = tagger.forward(batch_data_list, batch_len_list, len(batch_data_list))
-                
-                nn_time = timeit.default_timer() - nn_start
-
-                loss_start = timeit.default_timer()
+               
                 flatten_tag = batch_tag_score.reshape(-1, batch_tag_score.shape[2])
                 flatten_label = torch.LongTensor(batch_label_list.reshape(-1))
+
+                predicted_tags = tagger.getLabel(flatten_tag)
+                diff = predicted_tags - flatten_label
+                false_pos = len(flatten_label[flatten_label == lTran.getLengths()['tag']])
+                tmp = len(diff[diff == 0]) - false_pos
+                correct_cntr += tmp if tmp > 0 else 0 
+
                 loss = loss_function(flatten_tag, flatten_label)
-                loss_time = timeit.default_timer() - loss_start
-                '''
-                loss = None
-                for tag_score, label_list  in zip(batch_tag_score, batch_label_list):
-                    for tag, label in zip(tag_score, label_list):
-                        t_label = torch.tensor([label]).long()
-                        tag = tag.view(1,tag.shape[0])
-                        t = loss_function(tag, t_label)
-                        loss = t if loss is None else loss + t
-                '''
                 loss_acc += loss.item()
                 loss.backward()
                 optimizer.step()
             print("epoch: " + str(epoch) + " " + str(loss_acc))
+            print("accuracy " + str(correct_cntr/len(train_dataset)))
 
 
 
-run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 10, 'RNN_H_DIM' : 13, 'EPOCHS' : 5, 'BATCH_SIZE' : 100})
+run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 30, 'EPOCHS' : 5, 'BATCH_SIZE' : 100})
 run.train()
