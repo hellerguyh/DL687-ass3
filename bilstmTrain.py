@@ -40,10 +40,15 @@ class As3Dataset(Dataset):
         suffix_list = []
         for line in content:
             if line == "":
-                dataset.append((sample_w, sample_t))
-                sample_w = []
-                sample_t = []
+                if last_line_is_space == True:
+                    pass
+                else:
+                    dataset.append((sample_w, sample_t))
+                    sample_w = []
+                    sample_t = []
+                    last_line_is_space = True
             else:
+                last_line_is_space = False
                 splitted_line = line.split()
                 label = None if is_test_data else splitted_line[1]
                 word = self.lowerWords(splitted_line[0])
@@ -144,7 +149,11 @@ class MyEmbedding(nn.Module):
     
     def forward(self, data):
         if self.flavor == 1:
-            return self.wembeddings(data)
+            try: 
+                return self.wembeddings(data)
+            except:
+                print(data)
+                raise Exception()
         if self.flavor == 3:
             return self.wembeddings(data) + self.pembeddings(data) + self.sembeddings(data) 
 
@@ -179,9 +188,9 @@ class Run(object):
 
     def train(self):
         print("Loading data")
-        train_dataset = As3Dataset('train')
+        train_dataset = As3Dataset('train_short')
         train_dataloader = DataLoader(dataset=train_dataset,
-                          batch_size=self.batch_size, shuffle=True)
+                          batch_size=self.batch_size, shuffle=False)
         print("Done loading data")
 
         wTran = Sample2EmbedIndex(train_dataset.word_set, train_dataset.prefix_set,
