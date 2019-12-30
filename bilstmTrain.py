@@ -224,10 +224,13 @@ class BiLSTM(nn.Module):
         #lstm_out, hidden1 = self.lstm(embeds.view(len(data_list[0]), batch_size, -1))
         lstm_out, _ = self.lstm(packed_embeds)
         unpacked_lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first = True)
-       
-        o_ln1 = [[self.linear1(o) for o in seq] for seq in unpacked_lstm_out]
+      
+        flatten = unpacked_lstm_out.reshape(-1, unpacked_lstm_out.shape[2])
+        o_ln1 = self.linear1(flatten)
+        #o_ln1 = [[self.linear1(o) for o in seq] for seq in unpacked_lstm_out]
+        shaped = o_ln1.reshape(batch_size, unpacked_lstm_out.shape[1], o_ln1.shape[1])
         #o_ln1 = [self.linear1(lstm_w) for lstm_w in unpacked_lstm_out]
-        return o_ln1
+        return shaped
 
     def getLabel(self, data):
         _, prediction_argmax = data[0].max(0)
@@ -267,14 +270,35 @@ class Run(object):
                           batch_size=self.batch_size, shuffle=False,
                           collate_fn = padder.collate_fn)
         print("Starting training")
+        print("data length = " + str(len(train_dataset)))
+        import timeit
         for epoch in range(self.num_epochs):
             loss_acc = 0
+            progress1 = 0
+            progress2 = 0
             for sample in train_dataloader:
+                if progress1/1000 == progress2:
+                    print("reached " + str(progress2*1000))
+                    if progress2 > 0:
+                        print("nn_time " + str(nn_time))
+                        print("loss_time " + str(loss_time))
+                    progress2+=1
+                progress1 += self.batch_size
                 tagger.zero_grad()
                 batch_data_list, batch_label_list, batch_len_list = sample
                 #data_list = data_list[0] #since there is only one type of embedding
-                #padder.padBatch(data_list, label_list, lens_list) 
+                #padder.padBatch(data_list, label_list, lens_list)
+                nn_start = timeit.default_timer()
                 batch_tag_score = tagger.forward(batch_data_list, batch_len_list, len(batch_data_list))
+                
+                nn_time = timeit.default_timer() - nn_start
+
+                loss_start = timeit.default_timer()
+                flatten_tag = batch_tag_score.reshape(-1, batch_tag_score.shape[2])
+                flatten_label = torch.LongTensor(batch_label_list.reshape(-1))
+                loss = loss_function(flatten_tag, flatten_label)
+                loss_time = timeit.default_timer() - loss_start
+                '''
                 loss = None
                 for tag_score, label_list  in zip(batch_tag_score, batch_label_list):
                     for tag, label in zip(tag_score, label_list):
@@ -282,6 +306,7 @@ class Run(object):
                         tag = tag.view(1,tag.shape[0])
                         t = loss_function(tag, t_label)
                         loss = t if loss is None else loss + t
+                '''
                 loss_acc += loss.item()
                 loss.backward()
                 optimizer.step()
@@ -289,5 +314,5 @@ class Run(object):
 
 
 
-run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 10, 'RNN_H_DIM' : 30, 'EPOCHS' : 5, 'BATCH_SIZE' : 100})
+run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 10, 'RNN_H_DIM' : 13, 'EPOCHS' : 5, 'BATCH_SIZE' : 100})
 run.train()
