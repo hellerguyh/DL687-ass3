@@ -82,9 +82,6 @@ class As3Dataset(Dataset):
 
     def __getitem__(self, index):
         return self.dataset[index]
-        return self.dataset[index][0], self.dataset[index][1], self.dataset[index][2]
-        #return self.wT.translate(self.dataset[index][0]), self.lT.translate(self.dataset[index][1])
-        
 
 class Sample2EmbedIndex(object):
     def __init__(self, wordset, prefixset, suffixset, flavor):
@@ -194,17 +191,6 @@ class Padding(object):
         data_b = [d[0] for d in data]
         tag_b = [d[1] for d in data]
         len_b = [d[2] for d in data]
-        '''print(data_b)
-        print(len_b)
-        try:
-            data_b = [b for _,b in sorted(zip(len_b, data_b), reverse=True)]
-            tag_b = [b for _,b in sorted(zip(len_b, tag_b), reverse=True)]
-            len_b = sorted(len_b, reverse=True)
-        except:
-            print(data_b)
-            print(len_b)
-            raise Exception()
-        '''
 
         return self.padBatch(data_b, tag_b, len_b)
 
@@ -221,15 +207,12 @@ class BiLSTM(nn.Module):
     def forward(self, data_list, len_list, batch_size):
         embeds_list = self.embeddings.forward(data_list)
         packed_embeds = torch.nn.utils.rnn.pack_padded_sequence(embeds_list, len_list, batch_first=True)
-        #lstm_out, hidden1 = self.lstm(embeds.view(len(data_list[0]), batch_size, -1))
         lstm_out, _ = self.lstm(packed_embeds)
         unpacked_lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first = True)
       
         flatten = unpacked_lstm_out.reshape(-1, unpacked_lstm_out.shape[2])
         o_ln1 = self.linear1(flatten)
-        #o_ln1 = [[self.linear1(o) for o in seq] for seq in unpacked_lstm_out]
         shaped = o_ln1.reshape(batch_size, unpacked_lstm_out.shape[1], o_ln1.shape[1])
-        #o_ln1 = [self.linear1(lstm_w) for lstm_w in unpacked_lstm_out]
         return shaped
 
     def getLabel(self, data):
@@ -250,16 +233,14 @@ class Run(object):
         train_dataset = As3Dataset('train')
         print("Done loading data")
 
-        wTran = Sample2EmbedIndex(train_dataset.word_set, train_dataset.prefix_set,
+        self.wTran = Sample2EmbedIndex(train_dataset.word_set, train_dataset.prefix_set,
                                   train_dataset.suffix_set, self.flavor)
-        lTran = TagTranslator(train_dataset.tag_set)
+        self.lTran = TagTranslator(train_dataset.tag_set)
 
-        #train_dataset.setWordTranslator(wTran)
-        #train_dataset.setLabelTranslator(lTran)
-        train_dataset.toIndexes(wT = wTran, lT = lTran)
+        train_dataset.toIndexes(wT = self.wTran, lT = self.lTran)
 
         tagger = BiLSTM(embedding_dim = self.edim, hidden_rnn_dim = self.rnn_h_dim,
-                translator=wTran, tagset_size = len(lTran.tag_dict) + 1)
+                translator=self.wTran, tagset_size = self.lTran.getLengths()['tag'] + 1)
 
         if (sys.argv[1] == 'load') or (sys.argv[1] == 'loadsave'):
             tagger.load_state_dict(torch.load('bilstm_params.pt'))
@@ -267,14 +248,13 @@ class Run(object):
         loss_function = nn.CrossEntropyLoss() #ignore_index=len(lTran.tag_dict))
         optimizer = torch.optim.Adam(tagger.parameters(), lr=0.01)
 
-        padder = Padding(wTran, lTran)
+        padder = Padding(self.wTran, self.lTran)
 
         train_dataloader = DataLoader(dataset=train_dataset,
                           batch_size=self.batch_size, shuffle=True,
                           collate_fn = padder.collate_fn)
         print("Starting training")
         print("data length = " + str(len(train_dataset)))
-        import timeit
         
         for epoch in range(self.num_epochs):
             loss_acc = 0
@@ -289,17 +269,16 @@ class Run(object):
                 progress1 += self.batch_size
                 tagger.zero_grad()
                 batch_data_list, batch_label_list, batch_len_list = sample
-                #data_list = data_list[0] #since there is only one type of embedding
-                #padder.padBatch(data_list, label_list, lens_list)
                 batch_tag_score = tagger.forward(batch_data_list, batch_len_list, len(batch_data_list))
                
                 flatten_tag = batch_tag_score.reshape(-1, batch_tag_score.shape[2])
                 flatten_label = torch.LongTensor(batch_label_list.reshape(-1))
 
+                #calc accuracy
                 predicted_tags = tagger.getLabel(flatten_tag)
                 diff = predicted_tags - flatten_label
                 no_diff = (diff == 0)
-                o_mask = (flatten_label == lTran.getLengths()['tag'])
+                o_mask = (flatten_label == self.lTran.getLengths()['tag'])
                 no_diff_and_o_label = no_diff*o_mask
                 to_ignore = len(no_diff_and_o_label[no_diff_and_o_label == True])
                 tmp = len(diff[diff == 0]) - to_ignore
@@ -317,7 +296,8 @@ class Run(object):
         
         if (sys.argv[1] == 'save') or (sys.argv[1] == 'loadsave'):
             torch.save(tagger.state_dict(), 'bilstm_params.pt')
-        
+       
+        '''
         testing_dataloader = DataLoader(dataset=train_dataset,
                           batch_size=1, shuffle=False,
                           collate_fn = padder.collate_fn)
@@ -355,7 +335,7 @@ class Run(object):
                                 print(reversed_dict)
                             wf.write(str(w) + "\n")
                         wf.write("\n")
-
+        '''
 
 
 run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 2, 'BATCH_SIZE' : 100})
