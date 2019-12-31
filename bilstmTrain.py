@@ -71,12 +71,6 @@ class As3Dataset(Dataset):
     def lowerWords(self, x):
         return x.lower() if self.lower_words else x
 
-    def setWordTranslator(self, tran):
-        self.wT = tran
-    
-    def setLabelTranslator(self, tran):
-        self.lT = tran
-
     def toIndexes(self, wT, lT):
         self.dataset = [(wT.translate(data[0]), lT.translate(data[1]), data[2]) for data in self.dataset]
 
@@ -121,10 +115,10 @@ class WTranslator(object):
         if self.flavor == 2:
             return self._translate2(word_list)
         if self.flavor == 3:
-            w = [self._dictHandleExp(self.wdict, word) for word in word_list]
-            p = [self._dictHandleExp(self.pre_dict, word[:3]) for word in word_list]
-            s = [self._dictHandleExp(self.suf_dict, word[-3:]) for word in word_list]
-            return [np.array([w, p, s])]
+            w = np.array(self._translate1(word_list))
+            p = np.array([self._dictHandleExp(self.pre_dict, word[:3]) for word in word_list])
+            s = np.array([self._dictHandleExp(self.suf_dict, word[-3:]) for word in word_list])
+            return [w, p, s]
         if self.flavor == 4:
             first = self._translate1(word_list)
             second = self._translate2(word_list)
@@ -171,7 +165,9 @@ class MyEmbedding(nn.Module):
         if self.flavor == 2:
             return self.cembeddings(torch.tensor(data).long())
         if self.flavor == 3:
-            return self.wembeddings(data) + self.pembeddings(data) + self.sembeddings(data) 
+            return (self.wembeddings(torch.tensor(data[0]).long()) + 
+                    self.pembeddings(torch.tensor(data[1]).long()) + 
+                    self.sembeddings(torch.tensor(data[2]).long()))
 
 class Padding(object):
     def __init__(self, wT, lT):
@@ -180,6 +176,8 @@ class Padding(object):
         self.wPadIndex = self.wT.getLengths()['word']
         self.lPadIndex = self.lT.getLengths()['tag']
         self.cPadIndex = self.wT.getLengths()['c']
+        self.pPadIndex = self.wT.getLengths()['pre']
+        self.sPadIndex = self.wT.getLengths()['suf']
         self.flavor = wT.flavor
 
     #def padWord(self, word_list, len_list):
@@ -190,7 +188,7 @@ class Padding(object):
         batch_size = len(len_b)
         padded_data = np.ones((batch_size, max_l))*padIndex
         for i, data in enumerate(data_b):
-            padded_data[i][:len_b[i]] = data[0] #first embeddings
+            padded_data[i][:len_b[i]] = data #first embeddings
         return padded_data
 
     def padTag(self, tag_b, len_b, max_l, padIndex):
@@ -218,24 +216,22 @@ class Padding(object):
 
     def padBatch(self, data_b, tag_b, len_b):
         padded_tag = self.padTag(tag_b, len_b, max(len_b), self.lPadIndex)
+        padded_sublens = None
         if self.flavor == 1:
-            padded_data = self.padData(data_b, len_b, max(len_b), self.wPadIndex)
-            padded_sublens = None
+            word_data_b = [b[0] for b in data_b]
+            padded_data = self.padData(word_data_b, len_b, max(len_b), self.wPadIndex)
         elif self.flavor == 2:
             padded_data, padded_sublens = self.padList(data_b, len_b, max(len_b))
-            
+        elif self.flavor == 3:
+            word_data_b = [d[0] for d in data_b]
+            prefix_data_b = [d[1] for d in data_b]
+            suffix_data_b = [d[2] for d in data_b]
+            word_padded_data = self.padData(word_data_b, len_b, max(len_b), self.wPadIndex)
+            prefix_padded_data = self.padData(prefix_data_b, len_b, max(len_b), self.pPadIndex)
+            suffix_padded_data = self.padData(suffix_data_b, len_b, max(len_b), self.sPadIndex)
+            padded_data = (word_padded_data, prefix_padded_data, suffix_padded_data)
+        
         return padded_data, padded_tag, len_b, padded_sublens
-
-    def padBatch_v0(self, data_b, tag_b, len_b):
-        max_l = max(len_b)
-        batch_size = len(tag_b)
-        padded_data = np.ones((batch_size, max_l))*self.wPadIndex
-        padded_tag = np.ones((batch_size, max_l))*self.lPadIndex
-        for i, sample in enumerate(zip(data_b, tag_b)):
-            data, tag = sample
-            padded_data[i][:len_b[i]] = data[0] #first embeddings
-            padded_tag[i][:len_b[i]] = np.array(tag)
-        return padded_data, padded_tag, len_b
 
     def collate_fn(self, data):
         data.sort(key=lambda x: x[2], reverse=True)
@@ -260,56 +256,35 @@ class BiLSTM(nn.Module):
         self.lstm = nn.LSTM(input_size = embedding_dim, hidden_size = hidden_rnn_dim,
                             bidirectional=True, num_layers=2, batch_first=True)
         self.linear1 = nn.Linear(hidden_rnn_dim*2, tagset_size)
-    
-    def forward(self, data_list, len_list, batch_size, padded_sublens):
+   
+
+    def runLSTMc(self, data_list, embeds_list, padded_sublens):
+        batch_size = data_list.shape[0]
+        max_sentence = data_list.shape[1]
+        
+        reshaped_embeds_list = embeds_list.reshape(-1, self.max_word_len, self.c_embeds_dim)
+        reshaped_sublens = padded_sublens.reshape(-1).tolist()
+        reshaped_sublens = [int(l) for l in reshaped_sublens]
+       
+        packed_c_embeds = torch.nn.utils.rnn.pack_padded_sequence(reshaped_embeds_list, reshaped_sublens, batch_first=True, enforce_sorted=False)
+        lstm_c_out, _ = self.lstmc(packed_c_embeds)
+        unpacked_lstmc_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_c_out, batch_first = True)
+
+        reshaped_indexes = torch.Tensor(np.array(reshaped_sublens) - np.ones(len(reshaped_sublens))).long()
+        reshaped_indexes = reshaped_indexes.view(-1,1)
+        reshaped_indexes = reshaped_indexes.repeat(1, unpacked_lstmc_out.shape[2])
+        reshaped_indexes = reshaped_indexes.view(reshaped_indexes.shape[0], 1, reshaped_indexes.shape[1])
+        last_layer = torch.gather(unpacked_lstmc_out,1, reshaped_indexes)
+        
+        reshaped_last_layer = last_layer.reshape(batch_size, max_sentence, -1)
+        return reshaped_last_layer
+            
+
+    def forward(self, data_list, len_list, padded_sublens):
+        batch_size = len(len_list)
         embeds_list = self.embeddings.forward(data_list)
         if self.flavor == 2:
-            batch_size = data_list.shape[0]
-            max_sentence = data_list.shape[1]
-            
-            reshaped_embeds_list = embeds_list.reshape(-1, self.max_word_len, self.c_embeds_dim)
-            reshaped_sublens = padded_sublens.reshape(-1).tolist()
-            reshaped_sublens = [int(l) for l in reshaped_sublens]
-           
-            packed_c_embeds = torch.nn.utils.rnn.pack_padded_sequence(reshaped_embeds_list, reshaped_sublens, batch_first=True, enforce_sorted=False)
-            lstm_c_out, _ = self.lstmc(packed_c_embeds)
-            unpacked_lstmc_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_c_out, batch_first = True)
-
-            reshaped_indexes = torch.Tensor(np.array(reshaped_sublens) - np.ones(len(reshaped_sublens))).long()
-            reshaped_indexes = reshaped_indexes.view(-1,1)
-            reshaped_indexes = reshaped_indexes.repeat(1, unpacked_lstmc_out.shape[2])
-            reshaped_indexes = reshaped_indexes.view(reshaped_indexes.shape[0], 1, reshaped_indexes.shape[1])
-            last_layer = torch.gather(unpacked_lstmc_out,1, reshaped_indexes)
-            
-            reshaped_last_layer = last_layer.reshape(batch_size, max_sentence, -1)
-            
-            
-            '''reshaped_unpacked_lstmc_out = unpacked_lstmc_out.reshape(batch_size, max_sentence, -1)
-            print(reshaped_unpacked_lstmc_out.shape)
-            
-            
-            #print(reshaped_unpacked_lstmc_out.shape)
-            #print(padded_sublens.shape)
-            ##last_layer = [[[torch.tensor(layers[padded_sublens[b][s]]) for layers in sentence] for s, sentence in enumerate(batch)] for b, batch in enumerate(reshaped_unpacked_lstmc_out)]
-            #last_layer = [torch.tensor([reshaped_unpacked_lstmc_out[b][s] 
-            #                            for s in range(reshaped_unpacked_lstmc_out.shape[1])]) 
-            #                            for b in range(reshaped_unpacked_lstmc_out.shape[0])]
-
-            #indexes = torch.Tensor(padded_sublens).long() - torch.ones(padded_sublens.shape)
-            
-            t = reshaped_unpacked_lstmc_out.shape
-            indexes = padded_sublens - np.ones(padded_sublens.shape)
-            indexes = torch.Tensor(indexes).long()
-            indexes = indexes.reshape(-1)
-            ids = indexes.repeat(1, t[2])
-            print(ids.shape)
-            ids = ids.view(-1, 1, t[2])
-            print(ids.shape)
-            last_layer = torch.gather(reshaped_unpacked_lstmc_out, 1, ids)
-            print(last_layer.shape)
-            #ids = ids.repeat(1, 255).view(-1, 1, 255)
-            '''
-            embeds_output = reshaped_last_layer 
+            embeds_output = self.runLSTMc(data_list, embeds_list, padded_sublens) 
         else:
             embeds_output = embeds_list
 
@@ -380,7 +355,7 @@ class Run(object):
                 progress1 += self.batch_size
                 tagger.zero_grad()
                 batch_data_list, batch_label_list, batch_len_list, padded_sublens = sample
-                batch_tag_score = tagger.forward(batch_data_list, batch_len_list, len(batch_data_list), padded_sublens)
+                batch_tag_score = tagger.forward(batch_data_list, batch_len_list, padded_sublens)
                
                 flatten_tag = batch_tag_score.reshape(-1, batch_tag_score.shape[2])
                 flatten_label = torch.LongTensor(batch_label_list.reshape(-1))
