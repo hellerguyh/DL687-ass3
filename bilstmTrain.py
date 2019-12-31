@@ -233,8 +233,7 @@ class Padding(object):
         elif self.flavor == 4:
             word_b = [d[0] for d in data_b]
             char_b = [d[1] for d in data_b]
-            word_data_b = [b[0] for b in word_b]
-            padded_word_data = self.padData(word_data_b, len_b, max(len_b), self.wPadIndex)
+            padded_word_data = self.padData(word_b, len_b, max(len_b), self.wPadIndex)
             padded_char_data, padded_sublens = self.padList(char_b, len_b, max(len_b))
             padded_data = (padded_word_data, padded_char_data)
         
@@ -299,8 +298,6 @@ class BiLSTM(nn.Module):
             embeds_word = embeds_list[0]
             embeds_char = embeds_list[1]
             char_data_list = data_list[1]
-        else:
-            embeds_word = embeds_list
 
         if self.flavor == 2 or self.flavor == 4:
             lstm_embeds_word = self.runLSTMc(char_data_list, embeds_char, padded_sublens)
