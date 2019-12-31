@@ -120,7 +120,7 @@ class WTranslator(object):
             s = np.array([self._dictHandleExp(self.suf_dict, word[-3:]) for word in word_list])
             return [w, p, s]
         if self.flavor == 4:
-            first = self._translate1(word_list)
+            first = np.array(self._translate1(word_list))
             second = self._translate2(word_list)
             return [first, second]
 
@@ -141,11 +141,11 @@ class MyEmbedding(nn.Module):
         super(MyEmbedding, self).__init__()
         self.flavor = translator.flavor
         p1 = 1 if padding else 0
-        if translator.flavor == 1:
+        if translator.flavor == 1 or translator.flavor == 4:
             l = translator.getLengths()['word'] 
             padding_idx = l if padding else None
             self.wembeddings = nn.Embedding(num_embeddings = l + p1, embedding_dim = embedding_dim, padding_idx = l)
-        if translator.flavor == 2:
+        if translator.flavor == 2 or translator.flavor == 4:
             l = translator.getLengths()['c']
             self.cembeddings = nn.Embedding(num_embeddings = l + p1, embedding_dim = c_embedding_dim, padding_idx = l)
         if translator.flavor == 3:
@@ -168,6 +168,10 @@ class MyEmbedding(nn.Module):
             return (self.wembeddings(torch.tensor(data[0]).long()) + 
                     self.pembeddings(torch.tensor(data[1]).long()) + 
                     self.sembeddings(torch.tensor(data[2]).long()))
+        if self.flavor == 4:
+            word_embeds = self.wembeddings(torch.tensor(data[0]).long())
+            char_embeds = self.cembeddings(torch.tensor(data[1]).long())
+            return (word_embeds, char_embeds)
 
 class Padding(object):
     def __init__(self, wT, lT):
@@ -179,10 +183,6 @@ class Padding(object):
         self.pPadIndex = self.wT.getLengths()['pre']
         self.sPadIndex = self.wT.getLengths()['suf']
         self.flavor = wT.flavor
-
-    #def padWord(self, word_list, len_list):
-    #    max_l = self.wT.max_word_len
-    #    batch_size = len(len_list)
 
     def padData(self, data_b, len_b, max_l, padIndex):
         batch_size = len(len_b)
@@ -230,6 +230,13 @@ class Padding(object):
             prefix_padded_data = self.padData(prefix_data_b, len_b, max(len_b), self.pPadIndex)
             suffix_padded_data = self.padData(suffix_data_b, len_b, max(len_b), self.sPadIndex)
             padded_data = (word_padded_data, prefix_padded_data, suffix_padded_data)
+        elif self.flavor == 4:
+            word_b = [d[0] for d in data_b]
+            char_b = [d[1] for d in data_b]
+            word_data_b = [b[0] for b in word_b]
+            padded_word_data = self.padData(word_data_b, len_b, max(len_b), self.wPadIndex)
+            padded_char_data, padded_sublens = self.padList(char_b, len_b, max(len_b))
+            padded_data = (padded_word_data, padded_char_data)
         
         return padded_data, padded_tag, len_b, padded_sublens
 
@@ -250,12 +257,14 @@ class BiLSTM(nn.Module):
         self.flavor = translator.flavor
         self.c_embeds_dim = c_embedding_dim
         self.max_word_len = translator.max_word_len
+        self.embedding_dim = embedding_dim
         self.embeddings = MyEmbedding(embedding_dim, translator, c_embedding_dim, True)
         self.lstmc = nn.LSTM(input_size = c_embedding_dim, hidden_size = embedding_dim,
                             batch_first = True)
         self.lstm = nn.LSTM(input_size = embedding_dim, hidden_size = hidden_rnn_dim,
                             bidirectional=True, num_layers=2, batch_first=True)
         self.linear1 = nn.Linear(hidden_rnn_dim*2, tagset_size)
+        self.lineare = nn.Linear(embedding_dim*2, embedding_dim)
    
 
     def runLSTMc(self, data_list, embeds_list, padded_sublens):
@@ -284,11 +293,30 @@ class BiLSTM(nn.Module):
         batch_size = len(len_list)
         embeds_list = self.embeddings.forward(data_list)
         if self.flavor == 2:
-            embeds_output = self.runLSTMc(data_list, embeds_list, padded_sublens) 
+            embeds_char = embeds_list
+            char_data_list = data_list
+        elif self.flavor == 4:
+            embeds_word = embeds_list[0]
+            embeds_char = embeds_list[1]
+            char_data_list = data_list[1]
         else:
-            embeds_output = embeds_list
+            embeds_word = embeds_list
 
-        packed_embeds = torch.nn.utils.rnn.pack_padded_sequence(embeds_output, len_list, batch_first=True)
+        if self.flavor == 2 or self.flavor == 4:
+            lstm_embeds_word = self.runLSTMc(char_data_list, embeds_char, padded_sublens)
+
+        if self.flavor == 2:
+            embeds_out = lstm_embeds_word
+        elif self.flavor == 4:
+            e_joined = torch.cat((embeds_word, lstm_embeds_word), dim=2)
+            flatten = e_joined.reshape(-1, e_joined.shape[2])
+            le_out = self.lineare(e_joined)
+            embeds_out = le_out.reshape(batch_size, e_joined.shape[1], self.embedding_dim)
+            embeds_out = embeds_word
+        else:
+            embeds_out = embeds_list
+        
+        packed_embeds = torch.nn.utils.rnn.pack_padded_sequence(embeds_out, len_list, batch_first=True)
         lstm_out, _ = self.lstm(packed_embeds)
         unpacked_lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first = True)
 
@@ -337,7 +365,7 @@ class Run(object):
         padder = Padding(self.wTran, self.lTran)
 
         train_dataloader = DataLoader(dataset=train_dataset,
-                          batch_size=self.batch_size, shuffle=True,
+                          batch_size=self.batch_size, shuffle=False,
                           collate_fn = padder.collate_fn)
         print("Starting training")
         print("data length = " + str(len(train_dataset)))
@@ -425,5 +453,5 @@ class Run(object):
 
 flavor = sys.argv[2]
 train_file = sys.argv[3]
-run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 5, 'BATCH_SIZE' : 100, 'CHAR_EMBEDDING_DIM': 5, 'TRAIN_FILE': train_file})
+run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 5, 'BATCH_SIZE' : 100, 'CHAR_EMBEDDING_DIM': 10, 'TRAIN_FILE': train_file})
 run.train()
