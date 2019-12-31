@@ -269,26 +269,20 @@ class BiLSTM(nn.Module):
             
             reshaped_embeds_list = embeds_list.reshape(-1, self.max_word_len, self.c_embeds_dim)
             reshaped_sublens = padded_sublens.reshape(-1).tolist()
+            reshaped_sublens = [int(l) for l in reshaped_sublens]
             
             packed_c_embeds = torch.nn.utils.rnn.pack_padded_sequence(reshaped_embeds_list, reshaped_sublens, batch_first=True, enforce_sorted=False)
-            #packed_c_embeds = torch.nn.utils.rnn.pack_padded_sequence(data_to_lstmc, lens_to_lstmc, batch_first=True, enforce_sorted=True)
             lstm_c_out, _ = self.lstmc(packed_c_embeds)
             unpacked_lstmc_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_c_out, batch_first = True)
-           
-            print(unpacked_lstmc_out.shape)
 
-            reshaped_unpacked_lstmc_out = unpacked_lstmc_out.reshape(batch_size, max_sentence, self.max_word_len, -1)
+            reshaped_unpacked_lstmc_out = unpacked_lstmc_out.reshape(batch_size, max_sentence, unpacked_lstmc_out.shape[1], -1)
             embeds_output = reshaped_unpacked_lstmc_out[:,:,-1,:]
         else:
             embeds_output = embeds_list
 
-        print(len(len_list))
-        print(embeds_output.shape)
         packed_embeds = torch.nn.utils.rnn.pack_padded_sequence(embeds_output, len_list, batch_first=True)
         lstm_out, _ = self.lstm(packed_embeds)
         unpacked_lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first = True)
-        print(unpacked_lstm_out.shape)
-        raise Exception()
 
         flatten = unpacked_lstm_out.reshape(-1, unpacked_lstm_out.shape[2])
         o_ln1 = self.linear1(flatten)
@@ -307,6 +301,7 @@ class Run(object):
         self.rnn_h_dim = params['RNN_H_DIM']
         self.num_epochs = params['EPOCHS']
         self.batch_size = params['BATCH_SIZE']
+        self.c_embedding_dim = params['CHAR_EMBEDDING_DIM']
 
     def train(self):
         print("Loading data")
@@ -321,7 +316,7 @@ class Run(object):
 
         tagger = BiLSTM(embedding_dim = self.edim, hidden_rnn_dim = self.rnn_h_dim,
                 translator=self.wTran, tagset_size = self.lTran.getLengths()['tag'] + 1,
-                c_embedding_dim = 2)
+                c_embedding_dim = self.c_embedding_dim)
 
         if (sys.argv[1] == 'load') or (sys.argv[1] == 'loadsave'):
             tagger.load_state_dict(torch.load('bilstm_params.pt'))
@@ -419,5 +414,5 @@ class Run(object):
         '''
 
 flavor = sys.argv[2]
-run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 2, 'BATCH_SIZE' : 3})
+run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 5, 'BATCH_SIZE' : 100, 'CHAR_EMBEDDING_DIM': 20})
 run.train()
