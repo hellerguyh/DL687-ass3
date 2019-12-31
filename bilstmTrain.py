@@ -335,10 +335,12 @@ class Run(object):
         self.num_epochs = params['EPOCHS']
         self.batch_size = params['BATCH_SIZE']
         self.c_embedding_dim = params['CHAR_EMBEDDING_DIM']
+        self.train_file = params['TRAIN_FILE']
+
 
     def train(self):
         print("Loading data")
-        train_dataset = As3Dataset('train')
+        train_dataset = As3Dataset(self.train_file)
         print("Done loading data")
 
         self.wTran = WTranslator(train_dataset.word_set, train_dataset.prefix_set,
@@ -447,5 +449,6 @@ class Run(object):
         '''
 
 flavor = sys.argv[2]
-run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 5, 'BATCH_SIZE' : 100, 'CHAR_EMBEDDING_DIM': 5})
+train_file = sys.argv[3]
+run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 5, 'BATCH_SIZE' : 100, 'CHAR_EMBEDDING_DIM': 5, 'TRAIN_FILE': train_file})
 run.train()
