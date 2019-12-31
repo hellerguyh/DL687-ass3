@@ -83,7 +83,7 @@ class As3Dataset(Dataset):
     def __getitem__(self, index):
         return self.dataset[index]
 
-class Sample2EmbedIndex(object):
+class WTranslator(object):
     def __init__(self, wordset, prefixset, suffixset, flavor):
         wordset.update('UNKNOWN')
         prefixset.update('UNKOWN')
@@ -93,7 +93,10 @@ class Sample2EmbedIndex(object):
         self.pre_dict = list2dict(list(prefixset))
         self.suf_dict = list2dict(list(suffixset))
         cset = set()
+        self.max_word_len = 0#max([len(word) for word in wordset])
         for word in wordset:
+            if len(word) > self.max_word_len:
+                self.max_word_len = len(word)
             for c in word:
                 cset.update(c)
         self.cdict = list2dict(list(cset))
@@ -108,13 +111,15 @@ class Sample2EmbedIndex(object):
         return [self._dictHandleExp(self.wdict, word) for word in word_list]
 
     def _translate2(self, word_list):
-        return [[self._dictHandleExp(self.cdict, l) for l in word] for word in word_list]
+        letter_trans = [np.array([self._dictHandleExp(self.cdict, l) for l in word]) for word in word_list]
+        lengths = [len(word) for word in word_list]
+        return [letter_trans, lengths]
 
     def translate(self, word_list):
         if self.flavor == 1:
             return [np.array(self._translate1(word_list))] 
         if self.flavor == 2:
-            return [np.array(self._translate2(word_list))]
+            return self._translate2(word_list)
         if self.flavor == 3:
             w = [self._dictHandleExp(self.wdict, word) for word in word_list]
             p = [self._dictHandleExp(self.pre_dict, word[:3]) for word in word_list]
@@ -126,10 +131,7 @@ class Sample2EmbedIndex(object):
             return [first, second]
 
     def getLengths(self):
-        if self.flavor == 1:
-            return {'word': len(self.wdict)}
-        if self.flavor == 3:
-            return {'word' : len(self.wdict), 'pre' : len(self.pre_dict), 'suf' : len(self.suf_dict)}
+        return {'word' : len(self.wdict), 'pre' : len(self.pre_dict), 'suf' : len(self.suf_dict), 'c' : len(self.cdict)}
 
 class TagTranslator(object):
     def __init__(self, tagset):
@@ -141,7 +143,7 @@ class TagTranslator(object):
 
 
 class MyEmbedding(nn.Module):
-    def __init__(self, embedding_dim, translator, padding=False):
+    def __init__(self, embedding_dim, translator, c_embedding_dim, padding=False):
         super(MyEmbedding, self).__init__()
         self.flavor = translator.flavor
         p1 = 1 if padding else 0
@@ -149,6 +151,9 @@ class MyEmbedding(nn.Module):
             l = translator.getLengths()['word'] 
             padding_idx = l if padding else None
             self.wembeddings = nn.Embedding(num_embeddings = l + p1, embedding_dim = embedding_dim, padding_idx = l)
+        if translator.flavor == 2:
+            l = translator.getLengths()['c']
+            self.cembeddings = nn.Embedding(num_embeddings = l + p1, embedding_dim = c_embedding_dim, padding_idx = l)
         if translator.flavor == 3:
             l = translator.getLengths()['word'] 
             padding_idx = l if padding else None
@@ -163,6 +168,8 @@ class MyEmbedding(nn.Module):
     def forward(self, data):
         if self.flavor == 1:
             return self.wembeddings(torch.tensor(data).long())
+        if self.flavor == 2:
+            return self.cembeddings(torch.tensor(data).long())
         if self.flavor == 3:
             return self.wembeddings(data) + self.pembeddings(data) + self.sembeddings(data) 
 
@@ -172,8 +179,54 @@ class Padding(object):
         self.lT = lT
         self.wPadIndex = self.wT.getLengths()['word']
         self.lPadIndex = self.lT.getLengths()['tag']
+        self.cPadIndex = self.wT.getLengths()['c']
+        self.flavor = wT.flavor
+
+    #def padWord(self, word_list, len_list):
+    #    max_l = self.wT.max_word_len
+    #    batch_size = len(len_list)
+
+    def padData(self, data_b, len_b, max_l, padIndex):
+        batch_size = len(len_b)
+        padded_data = np.ones((batch_size, max_l))*padIndex
+        for i, data in enumerate(data_b):
+            padded_data[i][:len_b[i]] = data[0] #first embeddings
+        return padded_data
+
+    def padTag(self, tag_b, len_b, max_l, padIndex):
+        batch_size = len(len_b)
+        padded_tag = np.ones((batch_size, max_l))*padIndex
+        for i,tag in enumerate(tag_b):
+            padded_tag[i][:len_b[i]] = np.array(tag)
+        return padded_tag
+  
+    def padList(self, data_b, lens_b,  max_l):
+        # Expect data_b shape = <batch_size>, <sentence_len>, [<word_len>, 1]
+        # returns: <batch_size>, <max sentence len>, <max word_len>
+
+        batch_size = len(lens_b)
+        padded_words = np.ones((batch_size, max_l, self.wT.max_word_len))*self.cPadIndex
+        padded_lens = np.ones((batch_size, max_l))
+        for i, batch in enumerate(data_b):
+            sentence, words_len = batch
+            for j, word in enumerate(sentence):
+                word_len = words_len[j]
+                padded_words[i][j][:word_len] = word
+                padded_lens[i][j] = word_len
+        
+        return padded_words, padded_lens
 
     def padBatch(self, data_b, tag_b, len_b):
+        padded_tag = self.padTag(tag_b, len_b, max(len_b), self.lPadIndex)
+        if self.flavor == 1:
+            padded_data = self.padData(data_b, len_b, max(len_b), self.wPadIndex)
+            padded_sublens = None
+        elif self.flavor == 2:
+            padded_data, padded_sublens = self.padList(data_b, len_b, max(len_b))
+            
+        return padded_data, padded_tag, len_b, padded_sublens
+
+    def padBatch_v0(self, data_b, tag_b, len_b):
         max_l = max(len_b)
         batch_size = len(tag_b)
         padded_data = np.ones((batch_size, max_l))*self.wPadIndex
@@ -185,7 +238,6 @@ class Padding(object):
         return padded_data, padded_tag, len_b
 
     def collate_fn(self, data):
-
         data.sort(key=lambda x: x[2], reverse=True)
 
         data_b = [d[0] for d in data]
@@ -197,19 +249,47 @@ class Padding(object):
 
 class BiLSTM(nn.Module):
     def __init__(self, embedding_dim, hidden_rnn_dim, tagset_size,
-                translator, dropout=False):
+                translator, c_embedding_dim, dropout=False):
         super(BiLSTM, self).__init__()
-        self.embeddings = MyEmbedding(embedding_dim, translator, True)
+        self.flavor = translator.flavor
+        self.c_embeds_dim = c_embedding_dim
+        self.max_word_len = translator.max_word_len
+        self.embeddings = MyEmbedding(embedding_dim, translator, c_embedding_dim, True)
+        self.lstmc = nn.LSTM(input_size = c_embedding_dim, hidden_size = embedding_dim,
+                            batch_first = True)
         self.lstm = nn.LSTM(input_size = embedding_dim, hidden_size = hidden_rnn_dim,
                             bidirectional=True, num_layers=2, batch_first=True)
         self.linear1 = nn.Linear(hidden_rnn_dim*2, tagset_size)
     
-    def forward(self, data_list, len_list, batch_size):
+    def forward(self, data_list, len_list, batch_size, padded_sublens):
         embeds_list = self.embeddings.forward(data_list)
-        packed_embeds = torch.nn.utils.rnn.pack_padded_sequence(embeds_list, len_list, batch_first=True)
+        if self.flavor == 2:
+            batch_size = data_list.shape[0]
+            max_sentence = data_list.shape[1]
+            
+            reshaped_embeds_list = embeds_list.reshape(-1, self.max_word_len, self.c_embeds_dim)
+            reshaped_sublens = padded_sublens.reshape(-1).tolist()
+            
+            packed_c_embeds = torch.nn.utils.rnn.pack_padded_sequence(reshaped_embeds_list, reshaped_sublens, batch_first=True, enforce_sorted=False)
+            #packed_c_embeds = torch.nn.utils.rnn.pack_padded_sequence(data_to_lstmc, lens_to_lstmc, batch_first=True, enforce_sorted=True)
+            lstm_c_out, _ = self.lstmc(packed_c_embeds)
+            unpacked_lstmc_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_c_out, batch_first = True)
+           
+            print(unpacked_lstmc_out.shape)
+
+            reshaped_unpacked_lstmc_out = unpacked_lstmc_out.reshape(batch_size, max_sentence, self.max_word_len, -1)
+            embeds_output = reshaped_unpacked_lstmc_out[:,:,-1,:]
+        else:
+            embeds_output = embeds_list
+
+        print(len(len_list))
+        print(embeds_output.shape)
+        packed_embeds = torch.nn.utils.rnn.pack_padded_sequence(embeds_output, len_list, batch_first=True)
         lstm_out, _ = self.lstm(packed_embeds)
         unpacked_lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first = True)
-      
+        print(unpacked_lstm_out.shape)
+        raise Exception()
+
         flatten = unpacked_lstm_out.reshape(-1, unpacked_lstm_out.shape[2])
         o_ln1 = self.linear1(flatten)
         shaped = o_ln1.reshape(batch_size, unpacked_lstm_out.shape[1], o_ln1.shape[1])
@@ -233,14 +313,15 @@ class Run(object):
         train_dataset = As3Dataset('train')
         print("Done loading data")
 
-        self.wTran = Sample2EmbedIndex(train_dataset.word_set, train_dataset.prefix_set,
+        self.wTran = WTranslator(train_dataset.word_set, train_dataset.prefix_set,
                                   train_dataset.suffix_set, self.flavor)
         self.lTran = TagTranslator(train_dataset.tag_set)
 
         train_dataset.toIndexes(wT = self.wTran, lT = self.lTran)
 
         tagger = BiLSTM(embedding_dim = self.edim, hidden_rnn_dim = self.rnn_h_dim,
-                translator=self.wTran, tagset_size = self.lTran.getLengths()['tag'] + 1)
+                translator=self.wTran, tagset_size = self.lTran.getLengths()['tag'] + 1,
+                c_embedding_dim = 2)
 
         if (sys.argv[1] == 'load') or (sys.argv[1] == 'loadsave'):
             tagger.load_state_dict(torch.load('bilstm_params.pt'))
@@ -268,8 +349,8 @@ class Run(object):
                     progress2+=1
                 progress1 += self.batch_size
                 tagger.zero_grad()
-                batch_data_list, batch_label_list, batch_len_list = sample
-                batch_tag_score = tagger.forward(batch_data_list, batch_len_list, len(batch_data_list))
+                batch_data_list, batch_label_list, batch_len_list, padded_sublens = sample
+                batch_tag_score = tagger.forward(batch_data_list, batch_len_list, len(batch_data_list), padded_sublens)
                
                 flatten_tag = batch_tag_score.reshape(-1, batch_tag_score.shape[2])
                 flatten_label = torch.LongTensor(batch_label_list.reshape(-1))
@@ -337,6 +418,6 @@ class Run(object):
                         wf.write("\n")
         '''
 
-
-run = Run({'FLAVOR':1, 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 2, 'BATCH_SIZE' : 100})
+flavor = sys.argv[2]
+run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 2, 'BATCH_SIZE' : 3})
 run.train()
