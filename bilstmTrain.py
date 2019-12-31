@@ -309,7 +309,6 @@ class BiLSTM(nn.Module):
             flatten = e_joined.reshape(-1, e_joined.shape[2])
             le_out = self.lineare(e_joined)
             embeds_out = le_out.reshape(batch_size, e_joined.shape[1], self.embedding_dim)
-            embeds_out = embeds_word
         else:
             embeds_out = embeds_list
         
@@ -362,7 +361,7 @@ class Run(object):
         padder = Padding(self.wTran, self.lTran)
 
         train_dataloader = DataLoader(dataset=train_dataset,
-                          batch_size=self.batch_size, shuffle=False,
+                          batch_size=self.batch_size, shuffle=True,
                           collate_fn = padder.collate_fn)
         print("Starting training")
         print("data length = " + str(len(train_dataset)))
@@ -450,5 +449,5 @@ class Run(object):
 
 flavor = sys.argv[2]
 train_file = sys.argv[3]
-run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 5, 'BATCH_SIZE' : 100, 'CHAR_EMBEDDING_DIM': 10, 'TRAIN_FILE': train_file})
+run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 5, 'BATCH_SIZE' : 100, 'CHAR_EMBEDDING_DIM': 30, 'TRAIN_FILE': train_file})
 run.train()
