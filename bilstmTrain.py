@@ -270,13 +270,46 @@ class BiLSTM(nn.Module):
             reshaped_embeds_list = embeds_list.reshape(-1, self.max_word_len, self.c_embeds_dim)
             reshaped_sublens = padded_sublens.reshape(-1).tolist()
             reshaped_sublens = [int(l) for l in reshaped_sublens]
-            
+           
             packed_c_embeds = torch.nn.utils.rnn.pack_padded_sequence(reshaped_embeds_list, reshaped_sublens, batch_first=True, enforce_sorted=False)
             lstm_c_out, _ = self.lstmc(packed_c_embeds)
             unpacked_lstmc_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_c_out, batch_first = True)
 
-            reshaped_unpacked_lstmc_out = unpacked_lstmc_out.reshape(batch_size, max_sentence, unpacked_lstmc_out.shape[1], -1)
-            embeds_output = reshaped_unpacked_lstmc_out[:,:,-1,:]
+            reshaped_indexes = torch.Tensor(np.array(reshaped_sublens) - np.ones(len(reshaped_sublens))).long()
+            reshaped_indexes = reshaped_indexes.view(-1,1)
+            reshaped_indexes = reshaped_indexes.repeat(1, unpacked_lstmc_out.shape[2])
+            reshaped_indexes = reshaped_indexes.view(reshaped_indexes.shape[0], 1, reshaped_indexes.shape[1])
+            last_layer = torch.gather(unpacked_lstmc_out,1, reshaped_indexes)
+            
+            reshaped_last_layer = last_layer.reshape(batch_size, max_sentence, -1)
+            
+            
+            '''reshaped_unpacked_lstmc_out = unpacked_lstmc_out.reshape(batch_size, max_sentence, -1)
+            print(reshaped_unpacked_lstmc_out.shape)
+            
+            
+            #print(reshaped_unpacked_lstmc_out.shape)
+            #print(padded_sublens.shape)
+            ##last_layer = [[[torch.tensor(layers[padded_sublens[b][s]]) for layers in sentence] for s, sentence in enumerate(batch)] for b, batch in enumerate(reshaped_unpacked_lstmc_out)]
+            #last_layer = [torch.tensor([reshaped_unpacked_lstmc_out[b][s] 
+            #                            for s in range(reshaped_unpacked_lstmc_out.shape[1])]) 
+            #                            for b in range(reshaped_unpacked_lstmc_out.shape[0])]
+
+            #indexes = torch.Tensor(padded_sublens).long() - torch.ones(padded_sublens.shape)
+            
+            t = reshaped_unpacked_lstmc_out.shape
+            indexes = padded_sublens - np.ones(padded_sublens.shape)
+            indexes = torch.Tensor(indexes).long()
+            indexes = indexes.reshape(-1)
+            ids = indexes.repeat(1, t[2])
+            print(ids.shape)
+            ids = ids.view(-1, 1, t[2])
+            print(ids.shape)
+            last_layer = torch.gather(reshaped_unpacked_lstmc_out, 1, ids)
+            print(last_layer.shape)
+            #ids = ids.repeat(1, 255).view(-1, 1, 255)
+            '''
+            embeds_output = reshaped_last_layer 
         else:
             embeds_output = embeds_list
 
@@ -414,5 +447,5 @@ class Run(object):
         '''
 
 flavor = sys.argv[2]
-run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 5, 'BATCH_SIZE' : 100, 'CHAR_EMBEDDING_DIM': 20})
+run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 5, 'BATCH_SIZE' : 100, 'CHAR_EMBEDDING_DIM': 5})
 run.train()
