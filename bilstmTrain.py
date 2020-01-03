@@ -126,16 +126,16 @@ class WTranslator(object):
         return [letter_trans, lengths]
 
     def translate(self, word_list):
-        if self.flavor == 1:
+        if self.flavor == 'a':
             return [np.array(self._translate1(word_list))] 
-        if self.flavor == 2:
+        if self.flavor == 'b':
             return self._translate2(word_list)
-        if self.flavor == 3:
+        if self.flavor == 'c':
             w = np.array(self._translate1(word_list))
             p = np.array([self._dictHandleExp(self.pre_dict, word[:3]) for word in word_list])
             s = np.array([self._dictHandleExp(self.suf_dict, word[-3:]) for word in word_list])
             return [w, p, s]
-        if self.flavor == 4:
+        if self.flavor == 'd':
             first = np.array(self._translate1(word_list))
             second = self._translate2(word_list)
             return [first, second]
@@ -166,14 +166,14 @@ class MyEmbedding(nn.Module):
         super(MyEmbedding, self).__init__()
         self.flavor = translator.flavor
         p1 = 1 if padding else 0
-        if translator.flavor == 1 or translator.flavor == 4:
+        if translator.flavor == 'a' or translator.flavor == 'd':
             l = translator.getLengths()['word'] 
             padding_idx = l if padding else None
             self.wembeddings = nn.Embedding(num_embeddings = l + p1, embedding_dim = embedding_dim, padding_idx = l)
-        if translator.flavor == 2 or translator.flavor == 4:
+        if translator.flavor == 'b' or translator.flavor == 'd':
             l = translator.getLengths()['c']
             self.cembeddings = nn.Embedding(num_embeddings = l + p1, embedding_dim = c_embedding_dim, padding_idx = l)
-        if translator.flavor == 3:
+        if translator.flavor == 'c':
             l = translator.getLengths()['word'] 
             padding_idx = l if padding else None
             self.wembeddings = nn.Embedding(num_embeddings = l + p1, embedding_dim = embedding_dim, padding_idx = l)
@@ -185,15 +185,15 @@ class MyEmbedding(nn.Module):
             self.sembeddings = nn.Embedding(num_embeddings = l + p1, embedding_dim = embedding_dim, padding_idx = l)
     
     def forward(self, data):
-        if self.flavor == 1:
+        if self.flavor == 'a':
             return self.wembeddings(torch.tensor(data).long())
-        if self.flavor == 2:
+        if self.flavor == 'b':
             return self.cembeddings(torch.tensor(data).long())
-        if self.flavor == 3:
+        if self.flavor == 'c':
             return (self.wembeddings(torch.tensor(data[0]).long()) + 
                     self.pembeddings(torch.tensor(data[1]).long()) + 
                     self.sembeddings(torch.tensor(data[2]).long()))
-        if self.flavor == 4:
+        if self.flavor == 'd':
             word_embeds = self.wembeddings(torch.tensor(data[0]).long())
             char_embeds = self.cembeddings(torch.tensor(data[1]).long())
             return (word_embeds, char_embeds)
@@ -242,12 +242,12 @@ class Padding(object):
     def padBatch(self, data_b, tag_b, len_b):
         padded_tag = self.padTag(tag_b, len_b, max(len_b), self.lPadIndex)
         padded_sublens = None
-        if self.flavor == 1:
+        if self.flavor == 'a':
             word_data_b = [b[0] for b in data_b]
             padded_data = self.padData(word_data_b, len_b, max(len_b), self.wPadIndex)
-        elif self.flavor == 2:
+        elif self.flavor == 'b':
             padded_data, padded_sublens = self.padList(data_b, len_b, max(len_b))
-        elif self.flavor == 3:
+        elif self.flavor == 'c':
             word_data_b = [d[0] for d in data_b]
             prefix_data_b = [d[1] for d in data_b]
             suffix_data_b = [d[2] for d in data_b]
@@ -255,7 +255,7 @@ class Padding(object):
             prefix_padded_data = self.padData(prefix_data_b, len_b, max(len_b), self.pPadIndex)
             suffix_padded_data = self.padData(suffix_data_b, len_b, max(len_b), self.sPadIndex)
             padded_data = (word_padded_data, prefix_padded_data, suffix_padded_data)
-        elif self.flavor == 4:
+        elif self.flavor == 'd':
             word_b = [d[0] for d in data_b]
             char_b = [d[1] for d in data_b]
             padded_word_data = self.padData(word_b, len_b, max(len_b), self.wPadIndex)
@@ -316,20 +316,20 @@ class BiLSTM(nn.Module):
     def forward(self, data_list, len_list, padded_sublens):
         batch_size = len(len_list)
         embeds_list = self.embeddings.forward(data_list)
-        if self.flavor == 2:
+        if self.flavor == 'b':
             embeds_char = embeds_list
             char_data_list = data_list
-        elif self.flavor == 4:
+        elif self.flavor == 'd':
             embeds_word = embeds_list[0]
             embeds_char = embeds_list[1]
             char_data_list = data_list[1]
 
-        if self.flavor == 2 or self.flavor == 4:
+        if self.flavor == 'b' or self.flavor == 'd':
             lstm_embeds_word = self.runLSTMc(char_data_list, embeds_char, padded_sublens)
 
-        if self.flavor == 2:
+        if self.flavor == 'b':
             embeds_out = lstm_embeds_word
-        elif self.flavor == 4:
+        elif self.flavor == 'd':
             e_joined = torch.cat((embeds_word, lstm_embeds_word), dim=2)
             flatten = e_joined.reshape(-1, e_joined.shape[2])
             le_out = self.lineare(e_joined)
@@ -364,6 +364,9 @@ class Run(object):
         self.test_file = params['TEST_FILE']
         self.test_o_file = params['TEST_O_FILE']
         self.tagging_type = params['TAGGING_TYPE']
+        self.model_file = params['MODEL_FILE']
+        self.save_to_file = params['SAVE_TO_FILE']
+        self.run_dev = params['RUN_DEV']
         if self.tagging_type == "ner":
             self.ignore_Os = True 
         elif self.tagging_type == "pos":
@@ -383,16 +386,16 @@ class Run(object):
         flavor_params.update({'wT' : wT.saveParams()})
         flavor_params.update({'lT' : lT.saveParams()})
         params.update({str(self.flavor)+self.tagging_type : flavor_params})
-        torch.save(params, "model_params.pt")
+        torch.save(params, self.model_file)
 
     def _load_translators_params(self, wT, lT):
-        params = torch.load('model_params.pt')
+        params = torch.load(self.model_file)
         flavor_params = params[str(self.flavor)+self.tagging_type]
         wT.loadParams(flavor_params['wT'])
         lT.loadParams(flavor_params['lT'])
 
     def _load_bilstm_params(self, tagger):
-        params = torch.load('model_params.pt')
+        params = torch.load(self.model_file)
         flavor_params = params[str(self.flavor)+self.tagging_type]
         tagger.load_state_dict(flavor_params['tagger'])
 
@@ -501,8 +504,8 @@ class Run(object):
                 translator=self.wTran, tagset_size = self.lTran.getLengths()['tag'] + 1,
                 c_embedding_dim = self.c_embedding_dim)
 
-        if (sys.argv[1] == 'load') or (sys.argv[1] == 'loadsave'):
-            tagger.load_state_dict(torch.load('bilstm_params.pt'))
+        #if (sys.argv[1] == 'load') or (sys.argv[1] == 'loadsave'):
+        #    tagger.load_state_dict(torch.load('bilstm_params.pt'))
 
         loss_function = nn.CrossEntropyLoss() #ignore_index=len(lTran.tag_dict))
         optimizer = torch.optim.Adam(tagger.parameters(), lr=0.01)
@@ -514,8 +517,9 @@ class Run(object):
                           collate_fn = padder.collate_fn)
         print("Starting training")
         print("data length = " + str(len(train_dataset)))
-        
-        self.runOnDev(tagger, padder) 
+       
+        if self.run_dev:
+            self.runOnDev(tagger, padder) 
         for epoch in range(self.num_epochs):
             loss_acc = 0
             progress1 = 0
@@ -546,53 +550,39 @@ class Run(object):
                 optimizer.step()
             print("epoch: " + str(epoch) + " " + str(loss_acc))
             print("accuracy " + str(correct_cntr/total_cntr))
-            self.runOnDev(tagger, padder) 
+            if self.run_dev:
+                self.runOnDev(tagger, padder) 
         
-        if (sys.argv[1] == 'save') or (sys.argv[1] == 'loadsave'):
-            self._save_model_params(tagger, self.wTran, self.lTran)
+        if self.save_to_file:
+            torch._save_model_params(tagger, self.wTran, self.lTran)
+        #if (sys.argv[1] == 'save') or (sys.argv[1] == 'loadsave'):
+            #self._save_model_params(tagger, self.wTran, self.lTran)
             #torch.save(tagger.state_dict(), 'bilstm_params.pt')
        
-        '''
-        testing_dataloader = DataLoader(dataset=train_dataset,
-                          batch_size=1, shuffle=False,
-                          collate_fn = padder.collate_fn)
-        reversed_dict = reverseDict(lTran.tag_dict)
-        reversed_dict.append('UNKNOWN')
-        with torch.no_grad():
-            with open('tmp_train_res', 'w') as wf:
-                for sample in testing_dataloader:
-                    batch_data_list, batch_label_list, batch_len_list = sample
-                    #print(batch_len_list)
-                    batch_tag_score = tagger.forward(batch_data_list, batch_len_list, len(batch_data_list))
-                    #print(batch_tag_score.shape)
-                    for i, sample_tag_list in enumerate(batch_tag_score):
-                        #print(sample_tag_list.shape)
-                        predicted_tags = tagger.getLabel(sample_tag_list)
-                        #print(predicted_tags.shape)
-                        for j in range(batch_len_list[i]):
-                            try:
-                                t = predicted_tags[j]
-                            except:
-                                print("j:")
-                                print(j)
-                                print("t:")
-                                print(t)
-                                print("predicted_tags:")
-                                print(predicted_tags)
-                            try:
-                                w = reversed_dict[t]
-                            except:
-                                print("w:")
-                                print(w)
-                                print("t:")
-                                print(t)
-                                print("reversed dict:")
-                                print(reversed_dict)
-                            wf.write(str(w) + "\n")
-                        wf.write("\n")
-        '''
 if __name__ == "__main__": 
-    flavor = sys.argv[2]
+    flavor = sys.argv[1]
+    train_file = sys.argv[2]
+    model_file = sys.argv[3]
+    tagging_type = sys.argv[4]
+    
+    run = Run({ 'FLAVOR': flavor, 
+                'EMBEDDING_DIM' : 50, 
+                'RNN_H_DIM' : 50, 
+                'EPOCHS' : 5, 
+                'BATCH_SIZE' : 100, 
+                'CHAR_EMBEDDING_DIM': 30, 
+                'TRAIN_FILE': train_file,
+                'DEV_FILE' : None, #dev_file,
+                'TAGGING_TYPE' : tagging_type,
+                'TEST_FILE': None, #test_file,
+                'TEST_O_FILE': None, #test_o_file,
+                'MODEL_FILE': model_file,
+                'SAVE_TO_FILE': True, 
+                'RUN_DEV' : False})
+
+    run.train()
+
+    '''
     folder = sys.argv[3]
     train_file = folder + "train" #sys.argv[3]
     dev_file = folder + "dev" #sys.argv[4]
@@ -615,3 +605,4 @@ if __name__ == "__main__":
         run.test()
     else:
         run.train()
+    '''
