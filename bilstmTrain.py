@@ -79,9 +79,9 @@ class As3Dataset(Dataset):
 
 class WTranslator(object):
     def __init__(self, wordset, prefixset, suffixset, flavor):
-        wordset.update('UNKNOWN')
-        prefixset.update('UNKOWN')
-        suffixset.update('UNKNOWN')
+        wordset.update(["UNKNOWN"])
+        prefixset.update(["UNKNOWN"])
+        suffixset.update(["UNKNOWN"])
         self.flavor = flavor
         self.wdict = list2dict(list(wordset))
         self.pre_dict = list2dict(list(prefixset))
@@ -92,7 +92,8 @@ class WTranslator(object):
             if len(word) > self.max_word_len:
                 self.max_word_len = len(word)
             for c in word:
-                cset.update(c)
+                cset.update(c.lower())
+        cset.update(["UNKNOWN"])
         self.cdict = list2dict(list(cset))
     
     def _dictHandleExp(self, dic, val):
@@ -105,7 +106,7 @@ class WTranslator(object):
         return [self._dictHandleExp(self.wdict, word) for word in word_list]
 
     def _translate2(self, word_list):
-        letter_trans = [np.array([self._dictHandleExp(self.cdict, l) for l in word]) for word in word_list]
+        letter_trans = [np.array([self._dictHandleExp(self.cdict, l.lower()) for l in word]) for word in word_list]
         lengths = [len(word) for word in word_list]
         return [letter_trans, lengths]
 
@@ -335,7 +336,59 @@ class Run(object):
         self.batch_size = params['BATCH_SIZE']
         self.c_embedding_dim = params['CHAR_EMBEDDING_DIM']
         self.train_file = params['TRAIN_FILE']
+        self.dev_file = params['DEV_FILE']
+        self.ignore_Os = params['IGNORE_Os']
 
+
+    def _calc_batch_acc(self, tagger, flatten_tag, flatten_label): 
+        predicted_tags = tagger.getLabel(flatten_tag)
+        diff = predicted_tags - flatten_label
+        no_diff = (diff == 0)
+        padding_mask = (flatten_label == self.lTran.getLengths()['tag'])
+        if self.ignore_Os:
+            Os_mask = (flatten_label == self.lTran.tag_dict['O'])
+            no_diff_and_padding_label = no_diff*(padding_mask + Os_mask)
+            no_diff_and_padding_label = (no_diff_and_padding_label > 0)
+        else:
+            no_diff_and_padding_label = no_diff*padding_mask
+
+        to_ignore = len(no_diff_and_padding_label[no_diff_and_padding_label == True])
+        tmp = len(diff[diff == 0]) - to_ignore
+        if tmp < 0:
+            raise Exception("non valid tmp value")
+        correct_cntr = tmp 
+        total_cntr = len(predicted_tags) - to_ignore
+        return correct_cntr, total_cntr
+
+    def _flat_vecs(self, batch_tag_score, batch_label_list):
+        flatten_tag = batch_tag_score.reshape(-1, batch_tag_score.shape[2])
+        flatten_label = torch.LongTensor(batch_label_list.reshape(-1))
+        return flatten_tag, flatten_label
+
+    def runOnDev(self, tagger, padder):
+        tagger.eval()
+        dev_dataset = As3Dataset(self.dev_file)
+        dev_dataset.toIndexes(wT = self.wTran, lT = self.lTran)
+        dev_dataloader = DataLoader(dataset=dev_dataset,
+                                    batch_size=self.batch_size, shuffle=False,
+                                    collate_fn = padder.collate_fn)
+        with torch.no_grad():
+            correct_cntr = 0
+            total_cntr = 0
+            for sample in dev_dataloader:
+                batch_data_list, batch_label_list, batch_len_list, padded_sublens = sample
+
+                batch_tag_score = tagger.forward(batch_data_list, batch_len_list, padded_sublens)
+              
+                flatten_tag, flatten_label = self._flat_vecs(batch_tag_score, batch_label_list)
+
+                #calc accuracy
+                c, t = self._calc_batch_acc(tagger, flatten_tag, flatten_label)
+                correct_cntr += c 
+                total_cntr += t
+        
+        print("Validation accuracy " + str(correct_cntr/total_cntr))
+        tagger.train()
 
     def train(self):
         print("Loading data")
@@ -366,6 +419,7 @@ class Run(object):
         print("Starting training")
         print("data length = " + str(len(train_dataset)))
         
+        self.runOnDev(tagger, padder) 
         for epoch in range(self.num_epochs):
             loss_acc = 0
             progress1 = 0
@@ -377,25 +431,18 @@ class Run(object):
                     print("reached " + str(progress2*1000))
                     progress2+=1
                 progress1 += self.batch_size
+
                 tagger.zero_grad()
                 batch_data_list, batch_label_list, batch_len_list, padded_sublens = sample
+
                 batch_tag_score = tagger.forward(batch_data_list, batch_len_list, padded_sublens)
-               
-                flatten_tag = batch_tag_score.reshape(-1, batch_tag_score.shape[2])
-                flatten_label = torch.LongTensor(batch_label_list.reshape(-1))
+              
+                flatten_tag, flatten_label = self._flat_vecs(batch_tag_score, batch_label_list)
 
                 #calc accuracy
-                predicted_tags = tagger.getLabel(flatten_tag)
-                diff = predicted_tags - flatten_label
-                no_diff = (diff == 0)
-                o_mask = (flatten_label == self.lTran.getLengths()['tag'])
-                no_diff_and_o_label = no_diff*o_mask
-                to_ignore = len(no_diff_and_o_label[no_diff_and_o_label == True])
-                tmp = len(diff[diff == 0]) - to_ignore
-                if tmp < 0:
-                    raise Exception("non valid tmp value")
-                correct_cntr += tmp 
-                total_cntr += len(predicted_tags) - to_ignore
+                c, t = self._calc_batch_acc(tagger, flatten_tag, flatten_label)
+                correct_cntr += c 
+                total_cntr += t
 
                 loss = loss_function(flatten_tag, flatten_label)
                 loss_acc += loss.item()
@@ -403,6 +450,7 @@ class Run(object):
                 optimizer.step()
             print("epoch: " + str(epoch) + " " + str(loss_acc))
             print("accuracy " + str(correct_cntr/total_cntr))
+            self.runOnDev(tagger, padder) 
         
         if (sys.argv[1] == 'save') or (sys.argv[1] == 'loadsave'):
             torch.save(tagger.state_dict(), 'bilstm_params.pt')
@@ -446,8 +494,17 @@ class Run(object):
                             wf.write(str(w) + "\n")
                         wf.write("\n")
         '''
-
-flavor = sys.argv[2]
-train_file = sys.argv[3]
-run = Run({'FLAVOR':int(flavor), 'EMBEDDING_DIM' : 50, 'RNN_H_DIM' : 50, 'EPOCHS' : 5, 'BATCH_SIZE' : 100, 'CHAR_EMBEDDING_DIM': 30, 'TRAIN_FILE': train_file})
-run.train()
+if __name__ == "__main__": 
+    flavor = sys.argv[2]
+    train_file = sys.argv[3]
+    dev_file = sys.argv[4]
+    run = Run({ 'FLAVOR': int(flavor), 
+                'EMBEDDING_DIM' : 50, 
+                'RNN_H_DIM' : 50, 
+                'EPOCHS' : 5, 
+                'BATCH_SIZE' : 100, 
+                'CHAR_EMBEDDING_DIM': 30, 
+                'TRAIN_FILE': train_file,
+                'DEV_FILE' : dev_file,
+                'IGNORE_Os' : True})
+    run.train()
