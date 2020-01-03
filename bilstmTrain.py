@@ -64,6 +64,7 @@ class As3Dataset(Dataset):
         self.suffix_set = set(suffix_list)
         self.tag_set = set(tag_list)
         self.dataset = dataset
+        self.is_test_data = is_test_data
 
     def __len__(self):
         return len(self.dataset)
@@ -72,30 +73,44 @@ class As3Dataset(Dataset):
         return x.lower() if self.lower_words else x
 
     def toIndexes(self, wT, lT):
-        self.dataset = [(wT.translate(data[0]), lT.translate(data[1]), data[2]) for data in self.dataset]
+        self.dataset = [(wT.translate(data[0]), lT.translate(data[1]) if self.is_test_data==False else None, data[2]) for data in self.dataset]
 
     def __getitem__(self, index):
         return self.dataset[index]
 
 class WTranslator(object):
-    def __init__(self, wordset, prefixset, suffixset, flavor):
-        wordset.update(["UNKNOWN"])
-        prefixset.update(["UNKNOWN"])
-        suffixset.update(["UNKNOWN"])
-        self.flavor = flavor
-        self.wdict = list2dict(list(wordset))
-        self.pre_dict = list2dict(list(prefixset))
-        self.suf_dict = list2dict(list(suffixset))
-        cset = set()
-        self.max_word_len = 0#max([len(word) for word in wordset])
-        for word in wordset:
-            if len(word) > self.max_word_len:
-                self.max_word_len = len(word)
-            for c in word:
-                cset.update(c.lower())
-        cset.update(["UNKNOWN"])
-        self.cdict = list2dict(list(cset))
-    
+    def __init__(self, wordset, prefixset, suffixset, flavor, init=True):
+        if init:
+            wordset.update(["UNKNOWN"])
+            prefixset.update(["UNKNOWN"])
+            suffixset.update(["UNKNOWN"])
+            self.flavor = flavor
+            self.wdict = list2dict(list(wordset))
+            self.pre_dict = list2dict(list(prefixset))
+            self.suf_dict = list2dict(list(suffixset))
+            cset = set()
+            self.max_word_len = 0#max([len(word) for word in wordset])
+            for word in wordset:
+                if len(word) > self.max_word_len:
+                    self.max_word_len = len(word)
+                for c in word:
+                    cset.update(c.lower())
+            cset.update(["UNKNOWN"])
+            self.cdict = list2dict(list(cset))
+   
+
+    def saveParams(self):
+        return {'cdict':self.cdict, 'wdict':self.wdict, 'pre':self.pre_dict, 'suf':self.suf_dict,
+                'flavor':self.flavor, 'max_word_len':self.max_word_len}
+
+    def loadParams(self, params):
+        self.cdict = params['cdict']
+        self.wdict = params['wdict']
+        self.pre_dict = params['pre']
+        self.suf_dict = params['suf']
+        self.max_word_len = params['max_word_len']
+        self.flavor = params['flavor']
+
     def _dictHandleExp(self, dic, val):
       try: 
         return dic[val]
@@ -129,12 +144,21 @@ class WTranslator(object):
         return {'word' : len(self.wdict), 'pre' : len(self.pre_dict), 'suf' : len(self.suf_dict), 'c' : len(self.cdict)}
 
 class TagTranslator(object):
-    def __init__(self, tagset):
-        self.tag_dict = list2dict(tagset)
+    def __init__(self, tagset, init=True):
+        if init:
+            self.tag_dict = list2dict(tagset)
+
     def translate(self, tag_list):
         return [self.tag_dict[tag] for tag in tag_list]
+
     def getLengths(self):
         return {'tag': len(self.tag_dict)}
+
+    def saveParams(self):
+        return {'tag':self.tag_dict}
+
+    def loadParams(self, params):
+        self.tag_dict = params['tag']
 
 
 class MyEmbedding(nn.Module):
@@ -337,8 +361,40 @@ class Run(object):
         self.c_embedding_dim = params['CHAR_EMBEDDING_DIM']
         self.train_file = params['TRAIN_FILE']
         self.dev_file = params['DEV_FILE']
-        self.ignore_Os = params['IGNORE_Os']
+        self.test_file = params['TEST_FILE']
+        self.test_o_file = params['TEST_O_FILE']
+        self.tagging_type = params['TAGGING_TYPE']
+        if self.tagging_type == "ner":
+            self.ignore_Os = True 
+        elif self.tagging_type == "pos":
+            self.ignore_Os = False
+        else: 
+            raise Exception("Invalid tagging type")
 
+    def _save_model_params(self, tagger, wT, lT):
+        try:
+            params = torch.load('model_params.pt')
+        except FileNotFoundError:
+            print("No model params file found - creating new model params")
+            params = {}
+
+        flavor_params = {}
+        flavor_params.update({'tagger' : tagger.state_dict()})
+        flavor_params.update({'wT' : wT.saveParams()})
+        flavor_params.update({'lT' : lT.saveParams()})
+        params.update({str(self.flavor)+self.tagging_type : flavor_params})
+        torch.save(params, "model_params.pt")
+
+    def _load_translators_params(self, wT, lT):
+        params = torch.load('model_params.pt')
+        flavor_params = params[str(self.flavor)+self.tagging_type]
+        wT.loadParams(flavor_params['wT'])
+        lT.loadParams(flavor_params['lT'])
+
+    def _load_bilstm_params(self, tagger):
+        params = torch.load('model_params.pt')
+        flavor_params = params[str(self.flavor)+self.tagging_type]
+        tagger.load_state_dict(flavor_params['tagger'])
 
     def _calc_batch_acc(self, tagger, flatten_tag, flatten_label): 
         predicted_tags = tagger.getLabel(flatten_tag)
@@ -389,6 +445,46 @@ class Run(object):
         
         print("Validation accuracy " + str(correct_cntr/total_cntr))
         tagger.train()
+
+    def test(self):
+        test_dataset = As3Dataset(file_path = self.test_file, 
+                                  is_test_data = True)
+
+        self.wTran = WTranslator(None, None, None, None, False)
+        self.lTran = TagTranslator(None, False)
+
+        self._load_translators_params(self.wTran, self.lTran)
+        test_dataset.toIndexes(wT = self.wTran, lT = self.lTran)
+
+        tagger = BiLSTM(embedding_dim = self.edim, hidden_rnn_dim = self.rnn_h_dim,
+                translator=self.wTran, tagset_size = self.lTran.getLengths()['tag'] + 1,
+                c_embedding_dim = self.c_embedding_dim)
+
+        self._load_bilstm_params(tagger)
+        padder = Padding(self.wTran, self.lTran)
+       
+        test_dataloader = DataLoader(dataset=test_dataset,
+                          batch_size=1, shuffle=False,
+                          collate_fn = padder.collate_fn)
+
+        reversed_dict = reverseDict(self.lTran.tag_dict)
+        reversed_dict.append('UNKNOWN')
+        with torch.no_grad():
+            with open(self.test_o_file, 'w') as wf:
+                for sample in test_dataloader:
+                    batch_data_list, batch_label_list, batch_len_list, padded_sublens = sample
+                    batch_tag_score = tagger.forward(batch_data_list,
+                                                     batch_len_list, padded_sublens)
+                    for i, sample_tag_list in enumerate(batch_tag_score):
+                        predicted_tags = tagger.getLabel(sample_tag_list)
+                        for j in range(batch_len_list[i]):
+                            t = predicted_tags[j]
+                            w = reversed_dict[t]
+                            wf.write(str(w) + "\n")
+                        wf.write("\n")
+
+        #test_dataset.toIndexes(wT = self.wTran, lT = self.lTran)
+        #self.runOnDev(tagger, padder)
 
     def train(self):
         print("Loading data")
@@ -453,7 +549,8 @@ class Run(object):
             self.runOnDev(tagger, padder) 
         
         if (sys.argv[1] == 'save') or (sys.argv[1] == 'loadsave'):
-            torch.save(tagger.state_dict(), 'bilstm_params.pt')
+            self._save_model_params(tagger, self.wTran, self.lTran)
+            #torch.save(tagger.state_dict(), 'bilstm_params.pt')
        
         '''
         testing_dataloader = DataLoader(dataset=train_dataset,
@@ -496,15 +593,25 @@ class Run(object):
         '''
 if __name__ == "__main__": 
     flavor = sys.argv[2]
-    train_file = sys.argv[3]
-    dev_file = sys.argv[4]
+    folder = sys.argv[3]
+    train_file = folder + "train" #sys.argv[3]
+    dev_file = folder + "dev" #sys.argv[4]
+    test_file = folder + "dev"
+    test_o_file = folder + "run_results"
+    tagging_type = str(sys.argv[4])
+    run_test = sys.argv[5]
     run = Run({ 'FLAVOR': int(flavor), 
                 'EMBEDDING_DIM' : 50, 
                 'RNN_H_DIM' : 50, 
-                'EPOCHS' : 5, 
+                'EPOCHS' : 1, 
                 'BATCH_SIZE' : 100, 
                 'CHAR_EMBEDDING_DIM': 30, 
                 'TRAIN_FILE': train_file,
                 'DEV_FILE' : dev_file,
-                'IGNORE_Os' : True})
-    run.train()
+                'TAGGING_TYPE' : tagging_type,
+                'TEST_FILE': test_file,
+                'TEST_O_FILE': test_o_file})
+    if run_test == 'Y':
+        run.test()
+    else:
+        run.train()
