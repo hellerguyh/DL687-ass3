@@ -5,7 +5,7 @@ import sys
 
 #flavors = ['a', 'b', 'c', 'd']
 #tagging = ['ner', 'pos']
-flavors = ['a']
+flavors = ['d']
 tagging = ['ner']
 
 def createGraphs():
@@ -21,7 +21,9 @@ def createGraphs():
         plt.savefig(tag + "_accuracy_graph.png")
 
 if __name__ == "__main__": 
-    
+    import random
+    random.seed(0)
+
     RUN_PARAMS = bilstmTrain.FAVORITE_RUN_PARAMS
 
     model_file = sys.argv[1]

@@ -94,7 +94,7 @@ class WTranslator(object):
                 if len(word) > self.max_word_len:
                     self.max_word_len = len(word)
                 for c in word:
-                    cset.update(c.lower())
+                    cset.update(c)#.lower())
             cset.update(["UNKNOWN"])
             self.cdict = list2dict(list(cset))
    
@@ -121,7 +121,8 @@ class WTranslator(object):
         return [self._dictHandleExp(self.wdict, word) for word in word_list]
 
     def _translate2(self, word_list):
-        letter_trans = [np.array([self._dictHandleExp(self.cdict, l.lower()) for l in word]) for word in word_list]
+        #letter_trans = [np.array([self._dictHandleExp(self.cdict, l.lower()) for l in word]) for word in word_list]
+        letter_trans = [np.array([self._dictHandleExp(self.cdict, l) for l in word]) for word in word_list]
         lengths = [len(word) for word in word_list]
         return [letter_trans, lengths]
 
@@ -588,10 +589,10 @@ class Run(object):
 FAVORITE_RUN_PARAMS = { 
                 'EMBEDDING_DIM' : 50, 
                 'RNN_H_DIM' : 50, 
-                'EPOCHS' : 5, 
+                'EPOCHS' : 20, 
                 'BATCH_SIZE' : 100, 
-                'CHAR_EMBEDDING_DIM': 30
-                'LEARNING_RATE' : 0.05
+                'CHAR_EMBEDDING_DIM': 50,#30,
+                'LEARNING_RATE' : 0.01
                 }
 
 if __name__ == "__main__": 
