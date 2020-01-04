@@ -283,12 +283,15 @@ class BiLSTM(nn.Module):
         self.max_word_len = translator.max_word_len
         self.embedding_dim = embedding_dim
         self.embeddings = MyEmbedding(embedding_dim, translator, c_embedding_dim, True)
+        self.dropout_0 = nn.Dropout()  
         self.lstmc = nn.LSTM(input_size = c_embedding_dim, hidden_size = embedding_dim,
                             batch_first = True)
         self.lstm = nn.LSTM(input_size = embedding_dim, hidden_size = hidden_rnn_dim,
                             bidirectional=True, num_layers=2, batch_first=True)
         self.linear1 = nn.Linear(hidden_rnn_dim*2, tagset_size)
+        self.dropout_1 = nn.Dropout()  
         self.lineare = nn.Linear(embedding_dim*2, embedding_dim)
+        self.dropout_e = nn.Dropout()  
    
 
     def runLSTMc(self, data_list, embeds_list, padded_sublens):
@@ -332,16 +335,20 @@ class BiLSTM(nn.Module):
         elif self.flavor == 'd':
             e_joined = torch.cat((embeds_word, lstm_embeds_word), dim=2)
             flatten = e_joined.reshape(-1, e_joined.shape[2])
+            e_joined = self.dropout_e(e_joined)
             le_out = self.lineare(e_joined)
             embeds_out = le_out.reshape(batch_size, e_joined.shape[1], self.embedding_dim)
         else:
             embeds_out = embeds_list
         
+        embeds_out = self.dropout_0(embeds_out)
+
         packed_embeds = torch.nn.utils.rnn.pack_padded_sequence(embeds_out, len_list, batch_first=True)
         lstm_out, _ = self.lstm(packed_embeds)
         unpacked_lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first = True)
 
         flatten = unpacked_lstm_out.reshape(-1, unpacked_lstm_out.shape[2])
+        flatten = self.dropout_1(flatten)
         o_ln1 = self.linear1(flatten)
         shaped = o_ln1.reshape(batch_size, unpacked_lstm_out.shape[1], o_ln1.shape[1])
         return shaped
@@ -367,6 +374,7 @@ class Run(object):
         self.model_file = params['MODEL_FILE']
         self.save_to_file = params['SAVE_TO_FILE']
         self.run_dev = params['RUN_DEV']
+        self.learning_rate = params['LEARNING_RATE']
         self.acc_data_list = []
         if self.tagging_type == "ner":
             self.ignore_Os = True 
@@ -520,7 +528,7 @@ class Run(object):
         #    tagger.load_state_dict(torch.load('bilstm_params.pt'))
 
         loss_function = nn.CrossEntropyLoss() #ignore_index=len(lTran.tag_dict))
-        optimizer = torch.optim.Adam(tagger.parameters(), lr=0.01)
+        optimizer = torch.optim.Adam(tagger.parameters(), lr=self.learning_rate) #0.01)
 
         padder = Padding(self.wTran, self.lTran)
 
@@ -561,8 +569,8 @@ class Run(object):
                 loss.backward()
                 optimizer.step()
                 
-                if self.run_dev:
-                    self.runOnDev(tagger, padder) 
+            if self.run_dev:
+                self.runOnDev(tagger, padder) 
 
             print("epoch: " + str(epoch) + " " + str(loss_acc))
             print("accuracy " + str(correct_cntr/total_cntr))
@@ -583,6 +591,7 @@ FAVORITE_RUN_PARAMS = {
                 'EPOCHS' : 5, 
                 'BATCH_SIZE' : 100, 
                 'CHAR_EMBEDDING_DIM': 30
+                'LEARNING_RATE' : 0.05
                 }
 
 if __name__ == "__main__": 
