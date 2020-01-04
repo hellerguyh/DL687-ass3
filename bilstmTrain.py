@@ -367,6 +367,7 @@ class Run(object):
         self.model_file = params['MODEL_FILE']
         self.save_to_file = params['SAVE_TO_FILE']
         self.run_dev = params['RUN_DEV']
+        self.acc_data_list = []
         if self.tagging_type == "ner":
             self.ignore_Os = True 
         elif self.tagging_type == "pos":
@@ -376,7 +377,7 @@ class Run(object):
 
     def _save_model_params(self, tagger, wT, lT):
         try:
-            params = torch.load('model_params.pt')
+            params = torch.load(self.model_file)
         except FileNotFoundError:
             print("No model params file found - creating new model params")
             params = {}
@@ -445,9 +446,23 @@ class Run(object):
                 c, t = self._calc_batch_acc(tagger, flatten_tag, flatten_label)
                 correct_cntr += c 
                 total_cntr += t
+       
+        acc = correct_cntr/total_cntr
+        self.acc_data_list.append(acc)
+        print("Validation accuracy " + str(acc))
         
-        print("Validation accuracy " + str(correct_cntr/total_cntr))
         tagger.train()
+
+
+    def _saveAccData(self):
+        try:
+            acc_data = torch.load('accuracy_graphs_data')
+        except FileNotFoundError:
+            print("No accuracy data file found - creating new")
+            acc_data = {}
+
+        acc_data.update({self.tagging_type+str(self.flavor): self.acc_data_list})
+        torch.save(acc_data, 'accuracy_graphs_data')
 
     def test(self):
         test_dataset = As3Dataset(file_path = self.test_file, 
@@ -485,9 +500,6 @@ class Run(object):
                             w = reversed_dict[t]
                             wf.write(str(w) + "\n")
                         wf.write("\n")
-
-        #test_dataset.toIndexes(wT = self.wTran, lT = self.lTran)
-        #self.runOnDev(tagger, padder)
 
     def train(self):
         print("Loading data")
@@ -548,29 +560,39 @@ class Run(object):
                 loss_acc += loss.item()
                 loss.backward()
                 optimizer.step()
+                
+                if self.run_dev:
+                    self.runOnDev(tagger, padder) 
+
             print("epoch: " + str(epoch) + " " + str(loss_acc))
             print("accuracy " + str(correct_cntr/total_cntr))
-            if self.run_dev:
-                self.runOnDev(tagger, padder) 
         
         if self.save_to_file:
-            torch._save_model_params(tagger, self.wTran, self.lTran)
+            self._save_model_params(tagger, self.wTran, self.lTran)
+
+        if self.run_dev:
+            self._saveAccData()
         #if (sys.argv[1] == 'save') or (sys.argv[1] == 'loadsave'):
             #self._save_model_params(tagger, self.wTran, self.lTran)
             #torch.save(tagger.state_dict(), 'bilstm_params.pt')
-       
+
+
+FAVORITE_RUN_PARAMS = { 
+                'EMBEDDING_DIM' : 50, 
+                'RNN_H_DIM' : 50, 
+                'EPOCHS' : 5, 
+                'BATCH_SIZE' : 100, 
+                'CHAR_EMBEDDING_DIM': 30
+                }
+
 if __name__ == "__main__": 
     flavor = sys.argv[1]
     train_file = sys.argv[2]
     model_file = sys.argv[3]
     tagging_type = sys.argv[4]
-    
-    run = Run({ 'FLAVOR': flavor, 
-                'EMBEDDING_DIM' : 50, 
-                'RNN_H_DIM' : 50, 
-                'EPOCHS' : 5, 
-                'BATCH_SIZE' : 100, 
-                'CHAR_EMBEDDING_DIM': 30, 
+   
+    RUN_PARAMS = FAVORITE_RUN_PARAMS
+    RUN_PARAMS.update({ 'FLAVOR': flavor, 
                 'TRAIN_FILE': train_file,
                 'DEV_FILE' : None, #dev_file,
                 'TAGGING_TYPE' : tagging_type,
@@ -579,30 +601,7 @@ if __name__ == "__main__":
                 'MODEL_FILE': model_file,
                 'SAVE_TO_FILE': True, 
                 'RUN_DEV' : False})
+    
+    run = Run(RUN_PARAMS)
 
     run.train()
-
-    '''
-    folder = sys.argv[3]
-    train_file = folder + "train" #sys.argv[3]
-    dev_file = folder + "dev" #sys.argv[4]
-    test_file = folder + "dev"
-    test_o_file = folder + "run_results"
-    tagging_type = str(sys.argv[4])
-    run_test = sys.argv[5]
-    run = Run({ 'FLAVOR': int(flavor), 
-                'EMBEDDING_DIM' : 50, 
-                'RNN_H_DIM' : 50, 
-                'EPOCHS' : 1, 
-                'BATCH_SIZE' : 100, 
-                'CHAR_EMBEDDING_DIM': 30, 
-                'TRAIN_FILE': train_file,
-                'DEV_FILE' : dev_file,
-                'TAGGING_TYPE' : tagging_type,
-                'TEST_FILE': test_file,
-                'TEST_O_FILE': test_o_file})
-    if run_test == 'Y':
-        run.test()
-    else:
-        run.train()
-    '''

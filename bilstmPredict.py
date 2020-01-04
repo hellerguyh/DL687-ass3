@@ -5,13 +5,10 @@ if __name__ == "__main__":
     model_file = sys.argv[2]
     test_file = sys.argv[3]
     tagging_type = sys.argv[4]
-    
-    run = Run({ 'FLAVOR': flavor, 
-                'EMBEDDING_DIM' : 50, 
-                'RNN_H_DIM' : 50, 
-                'EPOCHS' : 5, 
-                'BATCH_SIZE' : 100, 
-                'CHAR_EMBEDDING_DIM': 30, 
+   
+    RUN_PARAMS = bilstmTrain.FAVORITE_RUN_PARAMS
+    RUN_PARAMS.update(
+                { 'FLAVOR': flavor, 
                 'TRAIN_FILE': None,
                 'DEV_FILE' : None, #dev_file,
                 'TAGGING_TYPE' : tagging_type,
@@ -19,6 +16,9 @@ if __name__ == "__main__":
                 'TEST_O_FILE': tagging_type + "test_predictions", #test_o_file,
                 'MODEL_FILE': model_file,
                 'SAVE_TO_FILE': False, 
-                'RUN_DEV' : False})
+                'RUN_DEV' : False}
+    )
+
+    run = bilstmTrain.Run(RUN_PARAMS)
 
     run.test()
