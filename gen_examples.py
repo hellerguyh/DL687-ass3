@@ -77,3 +77,7 @@ if __name__ == "__main__":
     language_gen_d = LanguageGen(pos_data_file_path="pos_examples_dev", neg_data_file_path="neg_examples_dev")
 
     language_gen_d.gen_data_files(size=1000)
+    
+    language_gen_test = LanguageGen(pos_data_file_path="pos_examples_test", neg_data_file_path="neg_examples_test")
+
+    language_gen_test.gen_data_files(size=1000)

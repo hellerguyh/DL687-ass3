@@ -47,18 +47,6 @@ class As3Dataset(Dataset):
                 dataset.append((l, tag, len(l)))
                 for c in line:
                     word_list.append(c)
-                '''if line == "":
-                    if last_line_is_space == True:
-                        pass
-                    else:
-                        dataset.append((sample_w, tag, len(sample_w)))
-                        sample_w = []
-                        last_line_is_space = True
-                else:
-                    last_line_is_space = False
-                    word = line[0]
-                    word_list.append(word)
-                    sample_w.append(word)'''
         
         self.word_set = set(word_list)
         self.dataset = dataset
@@ -78,10 +66,6 @@ class WTranslator(object):
         if init:
             wordset.update(["UNKNOWN"])
             self.wdict = list2dict(list(wordset))
-
-    def saveParams(self):
-        return {'cdict':self.cdict, 'wdict':self.wdict, 'pre':self.pre_dict, 'suf':self.suf_dict,
-                'flavor':self.flavor, 'max_word_len':self.max_word_len}
 
     def loadParams(self, params):
         self.cdict = params['cdict']
@@ -117,13 +101,6 @@ class TagTranslator(object):
     def getLengths(self):
         return {'tag': len(self.tag_dict)}
 
-    def saveParams(self):
-        return {'tag':self.tag_dict}
-
-    def loadParams(self, params):
-        self.tag_dict = params['tag']
-
-
 class MyEmbedding(nn.Module):
     def __init__(self, embedding_dim, translator):
         super(MyEmbedding, self).__init__()
@@ -157,7 +134,6 @@ class Padding(object):
         return padded_tag
   
     def padBatch(self, data_b, tag_b, len_b):
-        #padded_tag = self.padTag(tag_b, len_b, max(len_b), self.lPadIndex)
         padded_tag = tag_b
         word_data_b = [b[0] for b in data_b]
         padded_data = self.padData(word_data_b, len_b, max(len_b), self.wPadIndex)
@@ -188,29 +164,6 @@ class BiLSTM(nn.Module):
         self.dropout_2 = nn.Dropout()
         self.dropout = dropout
    
-
-    '''def runLSTMc(self, data_list, embeds_list, padded_sublens):
-        batch_size = data_list.shape[0]
-        max_sentence = data_list.shape[1]
-        
-        reshaped_embeds_list = embeds_list.reshape(-1, self.max_word_len, self.c_embeds_dim)
-        reshaped_sublens = padded_sublens.reshape(-1).tolist()
-        reshaped_sublens = [int(l) for l in reshaped_sublens]
-       
-        packed_c_embeds = torch.nn.utils.rnn.pack_padded_sequence(reshaped_embeds_list, reshaped_sublens, batch_first=True, enforce_sorted=False)
-        lstm_c_out, _ = self.lstmc(packed_c_embeds)
-        unpacked_lstmc_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_c_out, batch_first = True)
-
-        reshaped_indexes = torch.Tensor(np.array(reshaped_sublens) - np.ones(len(reshaped_sublens))).long()
-        reshaped_indexes = reshaped_indexes.view(-1,1)
-        reshaped_indexes = reshaped_indexes.repeat(1, unpacked_lstmc_out.shape[2])
-        reshaped_indexes = reshaped_indexes.view(reshaped_indexes.shape[0], 1, reshaped_indexes.shape[1])
-        last_layer = torch.gather(unpacked_lstmc_out,1, reshaped_indexes)
-        
-        reshaped_last_layer = last_layer.reshape(batch_size, max_sentence, -1)
-        return reshaped_last_layer'''
-            
-
     def forward(self, data_list, len_list):
         batch_size = len(len_list)
         embeds_list = self.embeddings.forward(data_list)
@@ -257,39 +210,13 @@ class Run(object):
         self.neg_train_file = params['NEG_TRAIN_FILE']
         self.pos_dev_file = params['POS_DEV_FILE']
         self.neg_dev_file = params['NEG_DEV_FILE']
-        self.test_file = params['TEST_FILE']
-        self.test_o_file = params['TEST_O_FILE']
-        self.save_to_file = params['SAVE_TO_FILE']
+        self.pos_test_file = params['POS_TEST_FILE']
+        self.neg_test_file = params['NEG_TEST_FILE']
         self.learning_rate = params['LEARNING_RATE']
         self.dropout = params['DROPOUT']
         self.hidden_mlp_dim = params['HIDDEN_MLP_DIM']
         self.run_dev = params['RUN_DEV']
         self.acc_data_list = []
-
-    def _save_model_params(self, tagger, wT, lT):
-        try:
-            params = torch.load(self.model_file)
-        except FileNotFoundError:
-            print("No model params file found - creating new model params")
-            params = {}
-
-        flavor_params = {}
-        flavor_params.update({'tagger' : tagger.state_dict()})
-        flavor_params.update({'wT' : wT.saveParams()})
-        flavor_params.update({'lT' : lT.saveParams()})
-        params.update({str(self.flavor)+self.tagging_type : flavor_params})
-        torch.save(params, self.model_file)
-
-    def _load_translators_params(self, wT, lT):
-        params = torch.load(self.model_file)
-        flavor_params = params[str(self.flavor)+self.tagging_type]
-        wT.loadParams(flavor_params['wT'])
-        lT.loadParams(flavor_params['lT'])
-
-    def _load_bilstm_params(self, tagger):
-        params = torch.load(self.model_file)
-        flavor_params = params[str(self.flavor)+self.tagging_type]
-        tagger.load_state_dict(flavor_params['tagger'])
 
     def _calc_batch_acc(self, tagger, flatten_tag, flatten_label): 
         predicted_tags = tagger.getLabel(flatten_tag)
@@ -306,14 +233,15 @@ class Run(object):
         total_cntr = len(predicted_tags) - to_ignore
         return correct_cntr, total_cntr
 
-    def _flat_vecs(self, batch_tag_score, batch_label_list):
-        flatten_tag = batch_tag_score.reshape(-1, batch_tag_score.shape[2])
-        flatten_label = torch.LongTensor(batch_label_list.reshape(-1))
-        return flatten_tag, flatten_label
-
-    def runOnDev(self, tagger, padder):
+    def runOnDev(self, tagger, padder, test_or_dev):
         tagger.eval()
-        dev_dataset = As3Dataset(self.pos_dev_file, self.neg_dev_file)
+        if test_or_dev == "test":
+            pos_file = self.pos_test_file
+            neg_file = self.neg_test_file
+        else:
+            pos_file = self.pos_dev_file
+            neg_file = self.neg_dev_file
+        dev_dataset = As3Dataset(pos_file, neg_file)
         dev_dataset.toIndexes(wT = self.wTran, lT = self.lTran)
         dev_dataloader = DataLoader(dataset=dev_dataset,
                                     batch_size=self.batch_size, shuffle=False,
@@ -335,7 +263,8 @@ class Run(object):
        
         acc = correct_cntr/total_cntr
         self.acc_data_list.append(acc)
-        print("Validation accuracy " + str(acc))
+        print(test_or_dev + " accuracy " + str(acc))
+        return acc
         
         tagger.train()
 
@@ -349,43 +278,6 @@ class Run(object):
 
         acc_data.update({self.tagging_type+str(self.flavor): self.acc_data_list})
         torch.save(acc_data, 'accuracy_graphs_data')
-
-    def test(self):
-        test_dataset = As3Dataset(file_path = self.test_file, 
-                                  is_test_data = True)
-
-        self.wTran = WTranslator(None, None, None, None, False)
-        self.lTran = TagTranslator(None, False)
-
-        self._load_translators_params(self.wTran, self.lTran)
-        test_dataset.toIndexes(wT = self.wTran, lT = self.lTran)
-
-        tagger = BiLSTM(embedding_dim = self.edim, hidden_rnn_dim = self.rnn_h_dim,
-                translator=self.wTran, tagset_size = self.lTran.getLengths()['tag'] + 1,
-                c_embedding_dim = self.c_embedding_dim, dropout = self.dropout)
-
-        self._load_bilstm_params(tagger)
-        padder = Padding(self.wTran, self.lTran)
-       
-        test_dataloader = DataLoader(dataset=test_dataset,
-                          batch_size=1, shuffle=False,
-                          collate_fn = padder.collate_fn)
-
-        reversed_dict = reverseDict(self.lTran.tag_dict)
-        reversed_dict.append('UNKNOWN')
-        with torch.no_grad():
-            with open(self.test_o_file, 'w') as wf:
-                for sample in test_dataloader:
-                    batch_data_list, batch_label_list, batch_len_list, padded_sublens = sample
-                    batch_tag_score = tagger.forward(batch_data_list,
-                                                     batch_len_list, padded_sublens)
-                    for i, sample_tag_list in enumerate(batch_tag_score):
-                        predicted_tags = tagger.getLabel(sample_tag_list)
-                        for j in range(batch_len_list[i]):
-                            t = predicted_tags[j]
-                            w = reversed_dict[t]
-                            wf.write(str(w) + "\n")
-                        wf.write("\n")
 
     def train(self):
         print("Loading data")
@@ -402,9 +294,6 @@ class Run(object):
                 hidden_mlp_dim=self.hidden_mlp_dim, translator=self.wTran, 
                 dropout = self.dropout)
 
-        #if (sys.argv[1] == 'load') or (sys.argv[1] == 'loadsave'):
-        #    tagger.load_state_dict(torch.load('bilstm_params.pt'))
-
         loss_function = nn.CrossEntropyLoss() #ignore_index=len(lTran.tag_dict))
         optimizer = torch.optim.Adam(tagger.parameters(), lr=self.learning_rate) #0.01)
 
@@ -417,19 +306,13 @@ class Run(object):
         print("data length = " + str(len(train_dataset)))
        
         if self.run_dev:
-            self.runOnDev(tagger, padder) 
+            self.runOnDev(tagger, padder, 'dev') 
         for epoch in range(self.num_epochs):
             loss_acc = 0
-            progress1 = 0
-            progress2 = 0
             correct_cntr = 0
             total_cntr = 0
             sentences_seen = 0
             for sample in train_dataloader:
-                if progress1/1000 == progress2:
-                    print("reached " + str(progress2*1000))
-                    progress2+=1
-                progress1 += self.batch_size
                 sentences_seen += self.batch_size
 
                 tagger.zero_grad()
@@ -437,7 +320,6 @@ class Run(object):
 
                 batch_tag_score = tagger.forward(batch_data_list, batch_len_list)
               
-                #flatten_tag, flatten_label = self._flat_vecs(batch_tag_score, batch_label_list)
                 flatten_tag, flatten_label = batch_tag_score, torch.LongTensor(batch_label_list)
 
                 #calc accuracy
@@ -450,15 +332,12 @@ class Run(object):
                 loss.backward()
                 optimizer.step()
 
-            self.runOnDev(tagger, padder) 
+            acc = self.runOnDev(tagger, padder, 'dev') 
             print("epoch: " + str(epoch) + " " + str(loss_acc))
             print("accuracy " + str(correct_cntr/total_cntr))
-        
-        if self.save_to_file:
-            self._save_model_params(tagger, self.wTran, self.lTran)
-
-        if self.run_dev:
-            self._saveAccData()
+            if acc == 1:
+                break
+        self.runOnDev(tagger, padder, 'test')
 
 
 FAVORITE_RUN_PARAMS = { 
@@ -471,13 +350,15 @@ FAVORITE_RUN_PARAMS = {
                 }
 
 if __name__ == "__main__": 
-   
+
     RUN_PARAMS = FAVORITE_RUN_PARAMS
     RUN_PARAMS.update({ 
                 'POS_TRAIN_FILE': './pos_examples_train' ,
                 'NEG_TRAIN_FILE': './neg_examples_train' ,
                 'POS_DEV_FILE': './pos_examples_dev' ,
                 'NEG_DEV_FILE': './neg_examples_dev' ,
+                'POS_TEST_FILE': './pos_examples_test' ,
+                'NEG_TEST_FILE': './neg_examples_test' ,
                 'TEST_FILE': None, #test_file,
                 'TEST_O_FILE': None, #test_o_file,
                 'SAVE_TO_FILE': False, 
