@@ -255,7 +255,8 @@ class Run(object):
         self.batch_size = params['BATCH_SIZE']
         self.pos_train_file = params['POS_TRAIN_FILE']
         self.neg_train_file = params['NEG_TRAIN_FILE']
-        self.dev_file = params['DEV_FILE']
+        self.pos_dev_file = params['POS_DEV_FILE']
+        self.neg_dev_file = params['NEG_DEV_FILE']
         self.test_file = params['TEST_FILE']
         self.test_o_file = params['TEST_O_FILE']
         self.save_to_file = params['SAVE_TO_FILE']
@@ -312,7 +313,7 @@ class Run(object):
 
     def runOnDev(self, tagger, padder):
         tagger.eval()
-        dev_dataset = As3Dataset(self.dev_file)
+        dev_dataset = As3Dataset(self.pos_dev_file, self.neg_dev_file)
         dev_dataset.toIndexes(wT = self.wTran, lT = self.lTran)
         dev_dataloader = DataLoader(dataset=dev_dataset,
                                     batch_size=self.batch_size, shuffle=False,
@@ -321,11 +322,11 @@ class Run(object):
             correct_cntr = 0
             total_cntr = 0
             for sample in dev_dataloader:
-                batch_data_list, batch_label_list, batch_len_list, padded_sublens = sample
+                batch_data_list, batch_label_list, batch_len_list = sample
 
-                batch_tag_score = tagger.forward(batch_data_list, batch_len_list, padded_sublens)
+                batch_tag_score = tagger.forward(batch_data_list, batch_len_list)
               
-                flatten_tag, flatten_label = self._flat_vecs(batch_tag_score, batch_label_list)
+                flatten_tag, flatten_label = batch_tag_score, torch.LongTensor(batch_label_list)
 
                 #calc accuracy
                 c, t = self._calc_batch_acc(tagger, flatten_tag, flatten_label)
@@ -449,13 +450,7 @@ class Run(object):
                 loss.backward()
                 optimizer.step()
 
-                if sentences_seen >= 500:
-                    sentences_seen = 0
-                    if self.run_dev:
-                        self.runOnDev(tagger, padder) 
-            
-                print("accuracy " + str(correct_cntr/total_cntr))
-
+            self.runOnDev(tagger, padder) 
             print("epoch: " + str(epoch) + " " + str(loss_acc))
             print("accuracy " + str(correct_cntr/total_cntr))
         
@@ -464,9 +459,6 @@ class Run(object):
 
         if self.run_dev:
             self._saveAccData()
-        #if (sys.argv[1] == 'save') or (sys.argv[1] == 'loadsave'):
-            #self._save_model_params(tagger, self.wTran, self.lTran)
-            #torch.save(tagger.state_dict(), 'bilstm_params.pt')
 
 
 FAVORITE_RUN_PARAMS = { 
@@ -482,9 +474,10 @@ if __name__ == "__main__":
    
     RUN_PARAMS = FAVORITE_RUN_PARAMS
     RUN_PARAMS.update({ 
-                'POS_TRAIN_FILE': './pos_examples_dev' ,
-                'NEG_TRAIN_FILE': './neg_examples_dev' ,
-                'DEV_FILE' : None, #dev_file,
+                'POS_TRAIN_FILE': './pos_examples_train' ,
+                'NEG_TRAIN_FILE': './neg_examples_train' ,
+                'POS_DEV_FILE': './pos_examples_dev' ,
+                'NEG_DEV_FILE': './neg_examples_dev' ,
                 'TEST_FILE': None, #test_file,
                 'TEST_O_FILE': None, #test_o_file,
                 'SAVE_TO_FILE': False, 
