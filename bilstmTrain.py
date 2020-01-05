@@ -292,7 +292,8 @@ class BiLSTM(nn.Module):
         self.linear1 = nn.Linear(hidden_rnn_dim*2, tagset_size)
         self.dropout_1 = nn.Dropout()  
         self.lineare = nn.Linear(embedding_dim*2, embedding_dim)
-        self.dropout_e = nn.Dropout()  
+        self.dropout_e = nn.Dropout()
+        self.dropout = dropout
    
 
     def runLSTMc(self, data_list, embeds_list, padded_sublens):
@@ -336,20 +337,23 @@ class BiLSTM(nn.Module):
         elif self.flavor == 'd':
             e_joined = torch.cat((embeds_word, lstm_embeds_word), dim=2)
             flatten = e_joined.reshape(-1, e_joined.shape[2])
-            e_joined = self.dropout_e(e_joined)
+            if self.dropout:
+                e_joined = self.dropout_e(e_joined)
             le_out = self.lineare(e_joined)
             embeds_out = le_out.reshape(batch_size, e_joined.shape[1], self.embedding_dim)
         else:
             embeds_out = embeds_list
         
-        embeds_out = self.dropout_0(embeds_out)
+        if self.dropout:
+            embeds_out = self.dropout_0(embeds_out)
 
         packed_embeds = torch.nn.utils.rnn.pack_padded_sequence(embeds_out, len_list, batch_first=True)
         lstm_out, _ = self.lstm(packed_embeds)
         unpacked_lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first = True)
 
         flatten = unpacked_lstm_out.reshape(-1, unpacked_lstm_out.shape[2])
-        flatten = self.dropout_1(flatten)
+        if self.dropout:
+            flatten = self.dropout_1(flatten)
         o_ln1 = self.linear1(flatten)
         shaped = o_ln1.reshape(batch_size, unpacked_lstm_out.shape[1], o_ln1.shape[1])
         return shaped
@@ -376,6 +380,7 @@ class Run(object):
         self.save_to_file = params['SAVE_TO_FILE']
         self.run_dev = params['RUN_DEV']
         self.learning_rate = params['LEARNING_RATE']
+        self.dropout = params['DROPOUT']
         self.acc_data_list = []
         if self.tagging_type == "ner":
             self.ignore_Os = True 
@@ -485,7 +490,7 @@ class Run(object):
 
         tagger = BiLSTM(embedding_dim = self.edim, hidden_rnn_dim = self.rnn_h_dim,
                 translator=self.wTran, tagset_size = self.lTran.getLengths()['tag'] + 1,
-                c_embedding_dim = self.c_embedding_dim)
+                c_embedding_dim = self.c_embedding_dim, dropout = self.dropout)
 
         self._load_bilstm_params(tagger)
         padder = Padding(self.wTran, self.lTran)
@@ -547,11 +552,13 @@ class Run(object):
             progress2 = 0
             correct_cntr = 0
             total_cntr = 0
+            sentences_seen = 0
             for sample in train_dataloader:
                 if progress1/1000 == progress2:
                     print("reached " + str(progress2*1000))
                     progress2+=1
                 progress1 += self.batch_size
+                sentences_seen += self.batch_size
 
                 tagger.zero_grad()
                 batch_data_list, batch_label_list, batch_len_list, padded_sublens = sample
@@ -569,9 +576,11 @@ class Run(object):
                 loss_acc += loss.item()
                 loss.backward()
                 optimizer.step()
-                
-            if self.run_dev:
-                self.runOnDev(tagger, padder) 
+
+                if sentences_seen >= 500:
+                    sentences_seen = 0
+                    if self.run_dev:
+                        self.runOnDev(tagger, padder) 
 
             print("epoch: " + str(epoch) + " " + str(loss_acc))
             print("accuracy " + str(correct_cntr/total_cntr))
@@ -600,6 +609,7 @@ if __name__ == "__main__":
     train_file = sys.argv[2]
     model_file = sys.argv[3]
     tagging_type = sys.argv[4]
+    epochs = sys.arvg[5]
    
     RUN_PARAMS = FAVORITE_RUN_PARAMS
     RUN_PARAMS.update({ 'FLAVOR': flavor, 
@@ -610,7 +620,9 @@ if __name__ == "__main__":
                 'TEST_O_FILE': None, #test_o_file,
                 'MODEL_FILE': model_file,
                 'SAVE_TO_FILE': True, 
-                'RUN_DEV' : False})
+                'RUN_DEV' : False,
+                'EPOCHS' : epochs, 
+                'DROPOUT' : True})
     
     run = Run(RUN_PARAMS)
 

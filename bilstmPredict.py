@@ -16,7 +16,8 @@ if __name__ == "__main__":
                 'TEST_O_FILE': tagging_type + "test_predictions", #test_o_file,
                 'MODEL_FILE': model_file,
                 'SAVE_TO_FILE': False, 
-                'RUN_DEV' : False}
+                'RUN_DEV' : False, 
+                'DROPOUT' : True}
     )
 
     run = bilstmTrain.Run(RUN_PARAMS)

@@ -42,7 +42,9 @@ if __name__ == "__main__":
                             'TEST_O_FILE': None, #test_o_file,
                             'MODEL_FILE': model_file,
                             'SAVE_TO_FILE': True, 
-                            'RUN_DEV' : True})
+                            'RUN_DEV' : True,
+                            'EPOCHS' : 20,
+                            'DROPOUT': True})
             
             run = bilstmTrain.Run(RUN_PARAMS)
             run.train()

@@ -2,7 +2,7 @@ import random as r
 
 
 class LanguageGen(object):
-    def __init__(self, pos_data_file_path, neg_data_file_path, sub_seq_size_lim=100):
+    def __init__(self, pos_data_file_path, neg_data_file_path, sub_seq_size_lim=10):
         self._pos_data_file_path = pos_data_file_path
         self._neg_data_file_path = neg_data_file_path
         self.sub_seq_size_lim = sub_seq_size_lim
